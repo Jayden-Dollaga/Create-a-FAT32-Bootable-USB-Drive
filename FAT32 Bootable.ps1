@@ -106,11 +106,19 @@ Write-Host "Initializing disk as $partitionStyle..."
 try {
     Initialize-Disk -Number $disk.Number -PartitionStyle $partitionStyle -Confirm:$false
 } catch {
-    Write-Host "  (Disk already initialized - continuing)" -ForegroundColor DarkGray
+    Write-Host "  (Initialize-Disk threw: $_)" -ForegroundColor DarkGray
+    Write-Host "  Attempting Set-Disk fallback..." -ForegroundColor DarkGray
 }
 
-# Refresh disk object after init
+# Refresh disk object - Initialize-Disk may have silently failed if the disk
+# was already initialized (common after Clear-Disk on some USB controllers).
+# Set-Disk forces the correct partition style regardless.
 $disk = Get-Disk -Number $disk.Number
+if ($disk.PartitionStyle -ne $partitionStyle) {
+    Write-Host "  Disk is $($disk.PartitionStyle), converting to $partitionStyle..." -ForegroundColor DarkGray
+    Set-Disk -Number $disk.Number -PartitionStyle $partitionStyle
+    $disk = Get-Disk -Number $disk.Number
+}
 
 Write-Host "Creating FAT32 partition..."
 
@@ -140,12 +148,12 @@ Write-Host "USB mounted as ${usbLetter}:" -ForegroundColor Green
 Write-Host ""
 Write-Host "Mounting ISO..." -ForegroundColor Cyan
 
-Mount-DiskImage -ImagePath $ISOPath 
+Mount-DiskImage -ImagePath $ISOPath | Out-Null
 $isoLetter = (Get-DiskImage -ImagePath $ISOPath | Get-Volume).DriveLetter
 
 if (-not $isoLetter) {
     Write-Host "Failed to determine ISO drive letter." -ForegroundColor Red
-    Dismount-DiskImage -ImagePath $ISOPath 
+    Dismount-DiskImage -ImagePath $ISOPath | Out-Null
     exit
 }
 
@@ -176,7 +184,7 @@ robocopy "${isoLetter}:\" "${usbLetter}:\" /E /R:1 /W:1 /XF install.wim install.
 
 if ($LASTEXITCODE -ge 8) {
     Write-Host "Robocopy failed (exit code $LASTEXITCODE)." -ForegroundColor Red
-    Dismount-DiskImage -ImagePath $ISOPath 
+    Dismount-DiskImage -ImagePath $ISOPath | Out-Null
     exit
 }
 
@@ -217,7 +225,7 @@ if (Test-Path $wimPath) {
 
     if ($LASTEXITCODE -ne 0) {
         Write-Host "DISM split-image failed (exit code $LASTEXITCODE)." -ForegroundColor Red
-        Dismount-DiskImage -ImagePath $ISOPath 
+        Dismount-DiskImage -ImagePath $ISOPath | Out-Null
         exit
     }
 
@@ -246,7 +254,7 @@ if (Test-Path $wimPath) {
 
         if ($LASTEXITCODE -ne 0) {
             Write-Host "DISM export failed at index $idx (exit code $LASTEXITCODE)." -ForegroundColor Red
-            Dismount-DiskImage -ImagePath $ISOPath 
+            Dismount-DiskImage -ImagePath $ISOPath | Out-Null
             Remove-Item $tempWim -Force -ErrorAction SilentlyContinue
             exit
         }
@@ -257,7 +265,7 @@ if (Test-Path $wimPath) {
 
     if ($LASTEXITCODE -ne 0) {
         Write-Host "DISM split-image failed (exit code $LASTEXITCODE)." -ForegroundColor Red
-        Dismount-DiskImage -ImagePath $ISOPath 
+        Dismount-DiskImage -ImagePath $ISOPath | Out-Null
         Remove-Item $tempWim -Force -ErrorAction SilentlyContinue
         exit
     }
@@ -274,7 +282,7 @@ if (Test-Path $wimPath) {
 Write-Host ""
 Write-Host "Checking UEFI boot file..." -ForegroundColor Cyan
 
-New-Item -ItemType Directory -Path "${usbLetter}:\efi\boot" -Force 
+New-Item -ItemType Directory -Path "${usbLetter}:\efi\boot" -Force | Out-Null
 $bootx64 = "${usbLetter}:\efi\boot\bootx64.efi"
 
 if (Test-Path $bootx64) {
@@ -390,16 +398,16 @@ function Patch-BCD {
     foreach ($guid in $targetGuids) {
         Write-Host "  Patching $guid (path: $winloadPath) ..." -ForegroundColor DarkGray
 
-        & bcdedit /store "$StorePath" /set "$guid" device   "ramdisk=[boot]\sources\boot.wim,{ramdiskoptions}" 2>&1 
-        & bcdedit /store "$StorePath" /set "$guid" osdevice "ramdisk=[boot]\sources\boot.wim,{ramdiskoptions}" 2>&1 
-        & bcdedit /store "$StorePath" /set "$guid" path     $winloadPath                                        2>&1 
+        & bcdedit /store "$StorePath" /set "$guid" device   "ramdisk=[boot]\sources\boot.wim,{ramdiskoptions}" 2>&1 | Out-Null
+        & bcdedit /store "$StorePath" /set "$guid" osdevice "ramdisk=[boot]\sources\boot.wim,{ramdiskoptions}" 2>&1 | Out-Null
+        & bcdedit /store "$StorePath" /set "$guid" path     $winloadPath                                        2>&1 | Out-Null
 
         Write-Host "    OK" -ForegroundColor Green
     }
 
     # Ensure ramdiskoptions entry exists and is correct
-    & bcdedit /store "$StorePath" /set "{ramdiskoptions}" ramdisksdidevice boot           2>&1 
-    & bcdedit /store "$StorePath" /set "{ramdiskoptions}" ramdisksdipath "\boot\boot.sdi" 2>&1 
+    & bcdedit /store "$StorePath" /set "{ramdiskoptions}" ramdisksdidevice boot           2>&1 | Out-Null
+    & bcdedit /store "$StorePath" /set "{ramdiskoptions}" ramdisksdipath "\boot\boot.sdi" 2>&1 | Out-Null
     Write-Host "  Ramdisk options: OK" -ForegroundColor Green
 
     # Print a short verification summary
@@ -483,7 +491,7 @@ if (-not $allOk) {
 # -----------------------------------------------------
 Write-Host ""
 Write-Host "Dismounting ISO..." -ForegroundColor Cyan
-Dismount-DiskImage -ImagePath $ISOPath 
+Dismount-DiskImage -ImagePath $ISOPath | Out-Null
 
 Write-Host ""
 Write-Host "===========================================" -ForegroundColor Green
