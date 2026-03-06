@@ -148,12 +148,12 @@ Write-Host "USB mounted as ${usbLetter}:" -ForegroundColor Green
 Write-Host ""
 Write-Host "Mounting ISO..." -ForegroundColor Cyan
 
-Mount-DiskImage -ImagePath $ISOPath | Out-Null
+$null = Mount-DiskImage -ImagePath $ISOPath
 $isoLetter = (Get-DiskImage -ImagePath $ISOPath | Get-Volume).DriveLetter
 
 if (-not $isoLetter) {
     Write-Host "Failed to determine ISO drive letter." -ForegroundColor Red
-    Dismount-DiskImage -ImagePath $ISOPath | Out-Null
+    $null = Dismount-DiskImage -ImagePath $ISOPath
     exit
 }
 
@@ -184,7 +184,7 @@ robocopy "${isoLetter}:\" "${usbLetter}:\" /E /R:1 /W:1 /XF install.wim install.
 
 if ($LASTEXITCODE -ge 8) {
     Write-Host "Robocopy failed (exit code $LASTEXITCODE)." -ForegroundColor Red
-    Dismount-DiskImage -ImagePath $ISOPath | Out-Null
+    $null = Dismount-DiskImage -ImagePath $ISOPath
     exit
 }
 
@@ -225,9 +225,11 @@ if (Test-Path $wimPath) {
 
     if ($LASTEXITCODE -ne 0) {
         Write-Host "DISM split-image failed (exit code $LASTEXITCODE)." -ForegroundColor Red
-        Dismount-DiskImage -ImagePath $ISOPath | Out-Null
+        $null = Dismount-DiskImage -ImagePath $ISOPath
         exit
     }
+
+    Write-Host "  Split files written to ${usbLetter}:\sources\" -ForegroundColor Green
 
 } elseif (Test-Path $esdPath) {
 
@@ -254,7 +256,7 @@ if (Test-Path $wimPath) {
 
         if ($LASTEXITCODE -ne 0) {
             Write-Host "DISM export failed at index $idx (exit code $LASTEXITCODE)." -ForegroundColor Red
-            Dismount-DiskImage -ImagePath $ISOPath | Out-Null
+            $null = Dismount-DiskImage -ImagePath $ISOPath
             Remove-Item $tempWim -Force -ErrorAction SilentlyContinue
             exit
         }
@@ -265,11 +267,12 @@ if (Test-Path $wimPath) {
 
     if ($LASTEXITCODE -ne 0) {
         Write-Host "DISM split-image failed (exit code $LASTEXITCODE)." -ForegroundColor Red
-        Dismount-DiskImage -ImagePath $ISOPath | Out-Null
+        $null = Dismount-DiskImage -ImagePath $ISOPath
         Remove-Item $tempWim -Force -ErrorAction SilentlyContinue
         exit
     }
 
+    Write-Host "  Split files written to ${usbLetter}:\sources\" -ForegroundColor Green
     Remove-Item $tempWim -Force -ErrorAction SilentlyContinue
 
 } else {
@@ -282,7 +285,7 @@ if (Test-Path $wimPath) {
 Write-Host ""
 Write-Host "Checking UEFI boot file..." -ForegroundColor Cyan
 
-New-Item -ItemType Directory -Path "${usbLetter}:\efi\boot" -Force | Out-Null
+$null = New-Item -ItemType Directory -Path "${usbLetter}:\efi\boot" -Force
 $bootx64 = "${usbLetter}:\efi\boot\bootx64.efi"
 
 if (Test-Path $bootx64) {
@@ -405,7 +408,10 @@ function Patch-BCD {
         Write-Host "    OK" -ForegroundColor Green
     }
 
-    # Ensure ramdiskoptions entry exists and is correct
+    # Ensure ramdiskoptions entry exists before setting values.
+    # bcdedit /set fails with "entry not found" if the entry was never created.
+    # /create is safe to call even if the entry already exists (it just fails silently).
+    & bcdedit /store "$StorePath" /create "{ramdiskoptions}" /d "Ramdisk Options" 2>&1 | Out-Null
     & bcdedit /store "$StorePath" /set "{ramdiskoptions}" ramdisksdidevice boot           2>&1 | Out-Null
     & bcdedit /store "$StorePath" /set "{ramdiskoptions}" ramdisksdipath "\boot\boot.sdi" 2>&1 | Out-Null
     Write-Host "  Ramdisk options: OK" -ForegroundColor Green
@@ -471,9 +477,10 @@ foreach ($f in $criticalFiles) {
     }
 }
 
-# Check that at least one SWM split file was created
-$swmFiles = Get-ChildItem "${usbLetter}:\sources\install*.swm" -ErrorAction SilentlyContinue
-if ($swmFiles -and $swmFiles.Count -gt 0) {
+# Check that at least one SWM split file was created.
+# Use -Path + -Filter (more reliable than inline wildcards on FAT32 volumes).
+$swmFiles = @(Get-ChildItem -Path "${usbLetter}:\sources" -Filter "install*.swm" -ErrorAction SilentlyContinue)
+if ($swmFiles.Count -gt 0) {
     Write-Host ("  [OK]      install.swm ({0} part(s))" -f $swmFiles.Count) -ForegroundColor Green
 } else {
     Write-Host "  [MISSING] install.swm - no split install image found" -ForegroundColor Red
@@ -491,7 +498,7 @@ if (-not $allOk) {
 # -----------------------------------------------------
 Write-Host ""
 Write-Host "Dismounting ISO..." -ForegroundColor Cyan
-Dismount-DiskImage -ImagePath $ISOPath | Out-Null
+$null = Dismount-DiskImage -ImagePath $ISOPath
 
 Write-Host ""
 Write-Host "===========================================" -ForegroundColor Green
