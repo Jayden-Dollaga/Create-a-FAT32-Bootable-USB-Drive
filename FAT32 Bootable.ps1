@@ -311,120 +311,121 @@ if (Test-Path $bootx64) {
 }
 
 # -----------------------------------------------------
-# BCD Patch - ensure device entries point to boot.wim
+# BCD Rebuild - create a clean BCD store from scratch
 #
-# FIX: The original looked only for "Windows Boot Loader"
-# entries. Windows setup ISOs use "Windows Setup" type
-# entries. The fallback to {default} was unreliable.
-# Now we detect both "Windows Setup" and "Windows Boot
-# Loader" entries and patch whichever we find.
+# WHY rebuild instead of patch:
+#   The BCD copied from the ISO has device entries that
+#   point to the CD-ROM (cdrom= or boot= pointing at the
+#   optical disc). Patching individual fields is fragile
+#   because we can't be sure which entry type names the
+#   ISO uses ("Windows Setup", "Windows Boot Loader",
+#   etc.), and the original entries may be missing fields
+#   like systemroot/winpe/detecthal that are required for
+#   WinPE to start winload correctly.
 #
-# FIX: winload path now differs per BCD store:
-#   EFI BCD  (\efi\microsoft\boot\BCD)  -> winload.efi
-#   BIOS BCD (\boot\BCD)                -> winload.exe
-# The original always wrote winload.efi to both, which
-# breaks BIOS boot.
+#   Deleting the ISO BCD and building a fresh one with
+#   bcdedit /createstore gives us a known-good, complete
+#   store every time, regardless of which Windows version
+#   or ISO variant is used.
+#
+# UEFI BCD  (\efi\microsoft\boot\BCD) -> winload.efi
+# BIOS BCD  (\boot\BCD)               -> winload.exe
 # -----------------------------------------------------
 Write-Host ""
-Write-Host "Patching BCD device entries..." -ForegroundColor Cyan
+Write-Host "Rebuilding BCD stores from scratch..." -ForegroundColor Cyan
 
-function Patch-BCD {
-    param([string]$StorePath)
+function Rebuild-BCD {
+    param(
+        [string]$StoreDir,   # Directory that must exist (e.g. F:\efi\microsoft\boot)
+        [string]$StorePath,  # Full path to BCD file
+        [bool]$IsEFI         # $true = EFI store, $false = BIOS store
+    )
 
-    if (-not (Test-Path $StorePath)) {
-        Write-Host "  Skipping (not found): $StorePath" -ForegroundColor DarkGray
-        return
-    }
+    Write-Host ""
+    Write-Host "  Store : $StorePath" -ForegroundColor Cyan
+    Write-Host "  Type  : $(if ($IsEFI) { 'EFI (winload.efi)' } else { 'BIOS (winload.exe)' })" -ForegroundColor Cyan
 
-    Write-Host "  Store: $StorePath" -ForegroundColor Cyan
+    # Ensure the parent directory exists
+    $null = New-Item -ItemType Directory -Path $StoreDir -Force
 
-    $lines = & bcdedit /store "$StorePath" /enum all 2>&1
+    # Delete the ISO's BCD so we start with a blank slate.
+    # The ISO BCD has cdrom device references and may be missing
+    # required WinPE fields (systemroot, winpe, detecthal).
+    Remove-Item $StorePath -Force -ErrorAction SilentlyContinue
 
+    # Create a new, empty BCD store
+    $out = & bcdedit /createstore "$StorePath" 2>&1
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "  ERROR reading BCD (exit $LASTEXITCODE):" -ForegroundColor Red
-        $lines | ForEach-Object { Write-Host "    $_" -ForegroundColor Red }
+        Write-Host "  ERROR: /createstore failed (exit $LASTEXITCODE): $out" -ForegroundColor Red
         return
     }
+    Write-Host "  Created empty store." -ForegroundColor DarkGray
 
-    # Parse GUIDs for "Windows Setup" and "Windows Boot Loader" entries.
-    # Both need the ramdisk device patch to boot correctly from USB.
-    $targetGuids = @()
-    $inTarget    = $false
-    $currentGuid = $null
-
-    foreach ($line in $lines) {
-        $trimmed = $line.Trim()
-
-        # Detect a Windows Setup or Windows Boot Loader section header
-        if ($trimmed -match "^Windows (Setup|Boot Loader)") {
-            $inTarget    = $true
-            $currentGuid = $null
-            continue
-        }
-
-        # Blank line signals end of the current entry block
-        if ($trimmed -eq "") {
-            if ($inTarget -and $currentGuid) {
-                $targetGuids += $currentGuid
-            }
-            $inTarget    = $false
-            $currentGuid = $null
-            continue
-        }
-
-        # Capture the GUID identifier for the current entry
-        if ($inTarget -and $trimmed -match "^identifier\s+(\{[0-9a-fA-F-]+\})") {
-            $currentGuid = $matches[1]
-        }
-    }
-
-    # If the last entry in the file had no trailing blank line, flush it
-    if ($inTarget -and $currentGuid) {
-        $targetGuids += $currentGuid
-    }
-
-    if ($targetGuids.Count -eq 0) {
-        Write-Host "  No Windows Setup/Boot Loader entries found. Falling back to {default}." -ForegroundColor Yellow
-        $targetGuids = @("{default}")
+    # ── Windows Boot Manager ──────────────────────────────────────
+    & bcdedit /store "$StorePath" /create "{bootmgr}" /d "Windows Boot Manager" 2>&1 | Out-Null
+    & bcdedit /store "$StorePath" /set    "{bootmgr}" device  boot                                       2>&1 | Out-Null
+    if ($IsEFI) {
+        & bcdedit /store "$StorePath" /set "{bootmgr}" path   "\EFI\Microsoft\Boot\bootmgfw.efi"         2>&1 | Out-Null
     } else {
-        Write-Host "  Entries to patch: $($targetGuids -join ', ')" -ForegroundColor Green
+        & bcdedit /store "$StorePath" /set "{bootmgr}" path   "\bootmgr"                                 2>&1 | Out-Null
     }
+    & bcdedit /store "$StorePath" /set "{bootmgr}" locale     "en-US"                                    2>&1 | Out-Null
+    & bcdedit /store "$StorePath" /timeout 30                                                             2>&1 | Out-Null
+    Write-Host "  Boot Manager : OK" -ForegroundColor DarkGray
 
-    # Determine correct winload filename based on which BCD store this is.
-    # EFI store uses winload.efi; legacy BIOS store uses winload.exe.
-    if ($StorePath -like "*\efi\*") {
-        $winloadPath = "\windows\system32\boot\winload.efi"
-    } else {
-        $winloadPath = "\windows\system32\boot\winload.exe"
+    # ── Windows Setup OS-Loader entry ────────────────────────────
+    # /create with no GUID allocates a new random GUID.
+    # We parse it from bcdedit's stdout ("The entry {guid} was created").
+    $createOut = (& bcdedit /store "$StorePath" /create /d "Windows Setup" /application osloader 2>&1) -join " "
+    $guidMatch = [regex]::Match($createOut, "\{[0-9a-fA-F\-]+\}")
+    if (-not $guidMatch.Success) {
+        Write-Host "  ERROR: Could not parse GUID from: $createOut" -ForegroundColor Red
+        return
     }
+    $setupGuid   = $guidMatch.Value
+    $winloadPath = if ($IsEFI) { "\windows\system32\boot\winload.efi" } `
+                               else { "\windows\system32\boot\winload.exe" }
 
-    foreach ($guid in $targetGuids) {
-        Write-Host "  Patching $guid (path: $winloadPath) ..." -ForegroundColor DarkGray
+    Write-Host "  Setup GUID   : $setupGuid" -ForegroundColor DarkGray
+    Write-Host "  Winload path : $winloadPath" -ForegroundColor DarkGray
 
-        & bcdedit /store "$StorePath" /set "$guid" device   "ramdisk=[boot]\sources\boot.wim,{ramdiskoptions}" 2>&1 | Out-Null
-        & bcdedit /store "$StorePath" /set "$guid" osdevice "ramdisk=[boot]\sources\boot.wim,{ramdiskoptions}" 2>&1 | Out-Null
-        & bcdedit /store "$StorePath" /set "$guid" path     $winloadPath                                        2>&1 | Out-Null
+    & bcdedit /store "$StorePath" /set "$setupGuid" device     "ramdisk=[boot]\sources\boot.wim,{ramdiskoptions}" 2>&1 | Out-Null
+    & bcdedit /store "$StorePath" /set "$setupGuid" osdevice   "ramdisk=[boot]\sources\boot.wim,{ramdiskoptions}" 2>&1 | Out-Null
+    & bcdedit /store "$StorePath" /set "$setupGuid" path       $winloadPath                                        2>&1 | Out-Null
+    & bcdedit /store "$StorePath" /set "$setupGuid" systemroot "\windows"                                          2>&1 | Out-Null
+    & bcdedit /store "$StorePath" /set "$setupGuid" detecthal  yes                                                 2>&1 | Out-Null
+    & bcdedit /store "$StorePath" /set "$setupGuid" winpe      yes                                                 2>&1 | Out-Null
+    & bcdedit /store "$StorePath" /set "$setupGuid" locale     "en-US"                                             2>&1 | Out-Null
+    Write-Host "  Setup entry  : OK" -ForegroundColor DarkGray
 
-        Write-Host "    OK" -ForegroundColor Green
-    }
+    # Wire setup entry as the default and only display-order item in bootmgr
+    & bcdedit /store "$StorePath" /set "{bootmgr}" default      "$setupGuid" 2>&1 | Out-Null
+    & bcdedit /store "$StorePath" /set "{bootmgr}" displayorder "$setupGuid" 2>&1 | Out-Null
 
-    # Ensure ramdiskoptions entry exists before setting values.
-    # bcdedit /set fails with "entry not found" if the entry was never created.
-    # /create is safe to call even if the entry already exists (it just fails silently).
-    & bcdedit /store "$StorePath" /create "{ramdiskoptions}" /d "Ramdisk Options" 2>&1 | Out-Null
-    & bcdedit /store "$StorePath" /set "{ramdiskoptions}" ramdisksdidevice boot           2>&1 | Out-Null
-    & bcdedit /store "$StorePath" /set "{ramdiskoptions}" ramdisksdipath "\boot\boot.sdi" 2>&1 | Out-Null
-    Write-Host "  Ramdisk options: OK" -ForegroundColor Green
+    # ── Ramdisk options ───────────────────────────────────────────
+    # {ramdiskoptions} is a well-known alias for
+    # {7619dcc8-fafe-11d9-b411-000476eba25f}.  We must /create it
+    # explicitly in a new store before we can /set values on it.
+    & bcdedit /store "$StorePath" /create "{ramdiskoptions}" /d "Ramdisk Options"   2>&1 | Out-Null
+    & bcdedit /store "$StorePath" /set    "{ramdiskoptions}" ramdisksdidevice boot   2>&1 | Out-Null
+    & bcdedit /store "$StorePath" /set    "{ramdiskoptions}" ramdisksdipath "\boot\boot.sdi" 2>&1 | Out-Null
+    Write-Host "  Ramdisk opts : OK" -ForegroundColor DarkGray
 
-    # Print a short verification summary
-    Write-Host "  Verification:" -ForegroundColor Cyan
+    # ── Verify ────────────────────────────────────────────────────
+    Write-Host "  --- Verify ---" -ForegroundColor Cyan
     $verify = & bcdedit /store "$StorePath" /enum all 2>&1
-    $verify | Where-Object { $_ -match "identifier|device|osdevice|path|ramdisk" } |
-              ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
+    $verify | Where-Object { $_ -match "identifier|device|osdevice|path|ramdisk|systemroot|winpe|detecthal" } |
+              ForEach-Object { Write-Host "    $_" -ForegroundColor Green }
+    Write-Host "  --- End ---" -ForegroundColor Cyan
 }
 
-Patch-BCD -StorePath "${usbLetter}:\efi\microsoft\boot\BCD"
-Patch-BCD -StorePath "${usbLetter}:\boot\BCD"
+Rebuild-BCD -StoreDir "${usbLetter}:\efi\microsoft\boot" `
+            -StorePath "${usbLetter}:\efi\microsoft\boot\BCD" `
+            -IsEFI $true
+
+Rebuild-BCD -StoreDir "${usbLetter}:\boot" `
+            -StorePath "${usbLetter}:\boot\BCD" `
+            -IsEFI $false
 
 # -----------------------------------------------------
 # BIOS Boot Support (MBR only)
