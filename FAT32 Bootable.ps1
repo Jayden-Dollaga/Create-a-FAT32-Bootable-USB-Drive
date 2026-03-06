@@ -1,5 +1,5 @@
 # Configure the path of your ISO file
-$iso = ""
+$iso = "C:\New folder\2019.ISO"
 
 # =========================================================
 # Do not edit below this line
