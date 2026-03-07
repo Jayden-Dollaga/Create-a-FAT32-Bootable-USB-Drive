@@ -699,28 +699,56 @@ function Start-UsbCreation {
         Set-Progress $UI 10 "Preparing USB drive..."
         Write-Log $UI "---  Disk Preparation  ---" "Cyan"
 
-        # Capture disk number NOW as a plain [int] before any destructive
-        # operation.  Clear-Disk causes a brief USB re-enumeration; if we
-        # read $DiskObj.Number after that the property can be null.
+        # Capture disk number as a plain [int] RIGHT NOW before any
+        # destructive operation so it survives re-enumeration events.
         [int]$diskNum = $DiskObj.Number
-        Write-Log $UI "Clearing disk $diskNum..." "Warn"
+        $style = if ($UseGPT) { 'GPT' } else { 'MBR' }
+        Write-Log $UI "Preparing disk $diskNum as $style..." "Warn"
 
-        # Ensure the disk is online and writable.  USB sticks left
-        # offline or read-only by Ventoy / Rufus will make Clear-Disk throw.
+        # Bring the disk online and writable first.
+        # Ventoy / Rufus often leave sticks offline or read-only.
         $DiskObj | Set-Disk -IsOffline $false -ErrorAction SilentlyContinue
         $DiskObj | Set-Disk -IsReadOnly $false -ErrorAction SilentlyContinue
 
-        # Stage 1: PowerShell Clear-Disk (non-fatal; often warns on drives
-        # that are about to be briefly re-enumerated by the storage stack).
-        Write-Log $UI "  Running Clear-Disk..." "Muted"
-        try {
-            $DiskObj | Clear-Disk -RemoveData -Confirm:$false -ErrorAction Stop
-        } catch {
-            Write-Log $UI "  Clear-Disk warning: $($_.Exception.Message)" "Warn"
+        # Use a SINGLE diskpart session that does clean + convert in one shot.
+        #
+        # WHY: Every previous approach relied on WMI reporting PartitionStyle
+        # = RAW after a clean.  On many USB controllers and some Windows
+        # versions the storage driver caches the old style (MBR/GPT) in WMI
+        # indefinitely — it never becomes RAW no matter how long you poll.
+        # By issuing "clean" and "convert mbr/gpt" in the SAME diskpart
+        # session we bypass WMI entirely: diskpart owns the partition table
+        # directly and the convert succeeds immediately after the clean,
+        # before the WMI cache has any chance to interfere.
+        $convertCmd = if ($UseGPT) { 'convert gpt' } else { 'convert mbr' }
+        $dpScript = @"
+select disk $diskNum
+clean
+$convertCmd
+exit
+"@
+        Write-Log $UI "  Running diskpart: clean + $convertCmd..." "Muted"
+        $dpResult = $dpScript | & diskpart.exe 2>&1
+        $dpResult | Where-Object { $_.ToString().Trim() -ne '' } | ForEach-Object {
+            Write-Log $UI "  diskpart: $_" "Muted"
         }
 
-        # Stage 2: Re-acquire the disk object.  After Clear-Disk the device
-        # can disappear from WMI for up to ~3 s while Windows re-enumerates.
+        # Verify diskpart succeeded by checking the output text.
+        # "DiskPart succeeded in cleaning" and "DiskPart successfully converted"
+        # are the exact strings diskpart.exe emits on success.
+        $dpOut = ($dpResult | Out-String)
+        if ($dpOut -notmatch 'succeeded in cleaning') {
+            throw "diskpart clean did not report success. Output: $dpOut"
+        }
+        if ($dpOut -notmatch 'successfully converted') {
+            throw "diskpart $convertCmd did not report success. Output: $dpOut"
+        }
+
+        # Wait for the storage stack to re-enumerate the newly initialised
+        # disk.  We do NOT check PartitionStyle here — WMI is unreliable
+        # immediately after diskpart.  We just wait for the disk to be
+        # visible and for Initialize-Disk to accept it (or confirm it is
+        # already correctly initialised by diskpart).
         Write-Log $UI "  Waiting for disk $diskNum to re-enumerate..." "Muted"
         $DiskObj = $null
         for ($tries = 0; $tries -lt 30; $tries++) {
@@ -732,66 +760,16 @@ function Start-UsbCreation {
             }
         }
         if (-not $DiskObj) {
-            throw "Disk $diskNum did not re-appear after 15 seconds. Try re-inserting the USB drive."
-        }
-        Write-Log $UI "  [OK] Disk $diskNum re-enumerated (style: $($DiskObj.PartitionStyle))." "Muted"
-
-        # Stage 3: If not RAW after Clear-Disk, use diskpart clean.
-        # GPT disks keep a protective MBR entry so Clear-Disk alone never
-        # gives RAW on them.  diskpart clean is the definitive fix.
-        if ($DiskObj.PartitionStyle -ne 'RAW') {
-            Write-Log $UI "  Not RAW (style: $($DiskObj.PartitionStyle)) - running diskpart clean..." "Warn"
-
-            $dpScript = "select disk $diskNum`nclean`nexit"
-            $dpResult = $dpScript | & diskpart.exe 2>&1
-            $dpResult | Where-Object { $_.ToString().Trim() -ne '' } | ForEach-Object {
-                Write-Log $UI "  diskpart: $_" "Muted"
-            }
-
-            # Poll until the disk is BOTH visible AND reporting RAW.
-            # After diskpart clean the device goes briefly offline (~0-2 s),
-            # then returns but WMI may still show the old style for ~2-4 s
-            # more while the storage driver flushes its metadata cache.
-            # Polling for RAW covers both delays in one loop.
-            Write-Log $UI "  Waiting for disk $diskNum to report RAW..." "Muted"
-            $DiskObj = $null
-            for ($tries = 0; $tries -lt 40; $tries++) {       # up to 20 s
-                try {
-                    $d = Get-Disk -Number $diskNum -ErrorAction Stop
-                    if ($d.PartitionStyle -eq 'RAW') {
-                        $DiskObj = $d
-                        break
-                    }
-                } catch {
-                    # Disk not yet visible - keep waiting.
-                }
-                Start-Sleep -Milliseconds 500
-            }
-
-            # Last-chance read: if the disk reappeared but WMI is still
-            # lagging let the check below emit a clear error.
-            if (-not $DiskObj) {
-                try { $DiskObj = Get-Disk -Number $diskNum -ErrorAction Stop } catch {}
-            }
-            if (-not $DiskObj) {
-                throw "Disk $diskNum did not re-appear after diskpart clean. Try re-inserting the USB drive."
-            }
-            if ($DiskObj.PartitionStyle -ne 'RAW') {
-                throw "Disk $diskNum is still not RAW after diskpart clean " +
-                      "(style: $($DiskObj.PartitionStyle)). " +
-                      "Try ejecting and re-inserting the USB drive, then run again."
-            }
-            Write-Log $UI "  [OK] diskpart clean succeeded - disk is now RAW." "Success"
-        } else {
-            Write-Log $UI "  [OK] Disk is RAW." "Success"
+            throw "Disk $diskNum did not re-appear after diskpart. Try re-inserting the USB drive."
         }
 
-        $style = if ($UseGPT) { 'GPT' } else { 'MBR' }
-        Write-Log $UI "Initializing as $style..."
-        $DiskObj | Initialize-Disk -PartitionStyle $style -ErrorAction Stop
+        # Initialize-Disk is not needed — diskpart "convert mbr/gpt" above
+        # already wrote the partition table.  Calling it causes "already
+        # initialized" errors on every run.  Removed.
+
         Start-Sleep -Milliseconds 800
-        $DiskObj = Get-Disk -Number $diskNum   # always use saved $diskNum
-        Write-Log $UI "[OK]  Disk initialized ($style)." "Success"
+        $DiskObj = Get-Disk -Number $diskNum
+        Write-Log $UI "[OK]  Disk $diskNum prepared ($style, $($DiskObj.PartitionStyle))." "Success"
 
         # ----------------------------------------------------------------
         # STEP 5  Create partition and format
@@ -1166,13 +1144,23 @@ exit
                            Select-Object -First 1
 
             if ($bootsectExe) {
-                $bsOut = & "$bootsectExe" /nt60 "$usbDrive`:" /force /mbr 2>&1
-                $bsOut | Where-Object { $_.Trim() -ne "" } |
-                         ForEach-Object { Write-Log $UI "  bootsect: $_" "Muted" }
-                if ($LASTEXITCODE -eq 0 -or $null -eq $LASTEXITCODE) {
-                    Write-Log $UI "  [OK] VBR + MBR boot code written." "Success"
-                } else {
-                    Write-Log $UI "  [!] bootsect exit code: $LASTEXITCODE" "Warn"
+                try {
+                    $bsOut = & "$bootsectExe" /nt60 "$usbDrive`:" /force /mbr 2>&1
+                    $bsOut | Where-Object { $_.Trim() -ne "" } |
+                             ForEach-Object { Write-Log $UI "  bootsect: $_" "Muted" }
+                    if ($LASTEXITCODE -eq 0 -or $null -eq $LASTEXITCODE) {
+                        Write-Log $UI "  [OK] VBR + MBR boot code written." "Success"
+                    } else {
+                        Write-Log $UI "  [!] bootsect exit code: $LASTEXITCODE (BIOS boot may not work)." "Warn"
+                    }
+                } catch {
+                    # bootsect.exe itself is corrupted or unreadable on this ISO.
+                    # This is non-fatal — UEFI boot via EFI files is unaffected.
+                    # Only legacy BIOS boot is impaired.
+                    Write-Log $UI "  [!] bootsect.exe could not run: $($_.Exception.Message)" "Warn"
+                    Write-Log $UI "  [!] BIOS (legacy) boot may not work, but UEFI boot is unaffected." "Warn"
+                    Write-Log $UI "      To fix BIOS boot manually, run on a working machine:" "Warn"
+                    Write-Log $UI "      bootsect /nt60 $usbDrive`: /force /mbr" "Warn"
                 }
             } else {
                 Write-Log $UI "  [!] bootsect.exe not found - BIOS boot may not work." "Warn"
