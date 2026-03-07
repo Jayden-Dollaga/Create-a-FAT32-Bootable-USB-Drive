@@ -621,11 +621,13 @@ function Start-UsbCreation {
             throw "SAFETY: The selected disk contains a system or boot partition - aborting."
         }
 
-        # BUG F FIX: 4 GB is too small for a Windows install ISO (Win11
-        # is 5-6 GB).  Raise the minimum to 8 GB and give a clear reason.
-        if ($DiskObj.Size -lt 8GB) {
+        # Minimum 7 GB (not 8 GB): USB manufacturers use 1 GB = 1,000,000,000
+        # bytes but Windows reports in GiB (1,073,741,824 bytes), so a real
+        # "8 GB" stick always shows up as ~7.45 GiB in Windows.  Using 8 GB
+        # as the threshold would reject every standard 8 GB drive.
+        if ($DiskObj.Size -lt 7GB) {
             throw "SAFETY: USB drive is too small ($([Math]::Round($DiskObj.Size/1GB,1)) GB). " +
-                  "Windows ISOs require at least 8 GB."
+                  "A genuine 8 GB or larger drive is required."
         }
         Write-Log $UI "[OK]  Safety checks passed." "Success"
 
