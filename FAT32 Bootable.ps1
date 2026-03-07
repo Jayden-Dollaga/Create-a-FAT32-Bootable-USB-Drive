@@ -147,7 +147,7 @@ function Build-GUI {
     $form.Controls.Add($txtIso)
 
     $btnBrowse                              = New-Object System.Windows.Forms.Button
-    $btnBrowse.Text                         = "Browse..."
+    $btnBrowse.Text                         = "Browse?"
     $btnBrowse.Location                     = New-Object System.Drawing.Point(548, 107)
     $btnBrowse.Size                         = New-Object System.Drawing.Size(132, 30)
     $btnBrowse.BackColor                    = $C.AccentDim
@@ -179,7 +179,7 @@ function Build-GUI {
     $form.Controls.Add($cmbUsb)
 
     $btnRefresh                           = New-Object System.Windows.Forms.Button
-    $btnRefresh.Text                      = "Refresh"
+    $btnRefresh.Text                      = "R  Refresh"
     $btnRefresh.Location                  = New-Object System.Drawing.Point(548, 193)
     $btnRefresh.Size                      = New-Object System.Drawing.Size(132, 30)
     $btnRefresh.BackColor                 = $C.BG3
@@ -316,7 +316,7 @@ function Build-GUI {
     $form.Controls.Add($btnStart)
 
     $btnCancel                           = New-Object System.Windows.Forms.Button
-    $btnCancel.Text                      = "Cancel"
+    $btnCancel.Text                      = "X  Cancel"
     $btnCancel.Location                  = New-Object System.Drawing.Point(548, 685)
     $btnCancel.Size                      = New-Object System.Drawing.Size(132, 42)
     $btnCancel.BackColor                 = $C.Red
@@ -409,12 +409,7 @@ function Refresh-UsbList {
     $UI.CmbUsb.Items.Clear()
     $script:UsbDrives = @()
 
-    try {
-        $disks = Get-Disk -ErrorAction Stop | Where-Object BusType -eq 'USB'
-    } catch {
-        $UI.LblUsbWarn.Text = "Unable to enumerate disks. Run from elevated Windows PowerShell."
-        return
-    }
+    $disks = Get-Disk | Where-Object BusType -eq 'USB'
     foreach ($disk in $disks) {
         $sizeGB = [Math]::Round($disk.Size / 1GB, 1)
         $label  = ""
@@ -447,17 +442,6 @@ function Refresh-UsbList {
 function Set-IsoPath {
     param($UI, [string]$Path)
     if (-not (Test-Path $Path)) { return }
-	
-    if ([System.IO.Path]::GetExtension($Path).ToLowerInvariant() -ne ".iso") {
-        [System.Windows.Forms.MessageBox]::Show(
-            "Please choose a valid .iso file.",
-            "Invalid file type",
-            [System.Windows.Forms.MessageBoxButtons]::OK,
-            [System.Windows.Forms.MessageBoxIcon]::Warning
-        ) | Out-Null
-        return
-    }
-
     $script:IsoPath    = $Path
     $sizeGB            = [Math]::Round((Get-Item $Path).Length / 1GB, 2)
     $UI.TxtIso.Text    = $Path
@@ -612,7 +596,7 @@ function Start-UsbCreation {
     try {
 
         # -- 1. Safety checks -----------------------------------------
-        Set-Progress $UI 2 "Running safety checks..."
+        Set-Progress $UI 2 "Running safety checks?"
         Write-Log $UI "---  Safety Checks  ---" "Cyan"
 
         if ($DiskObj.BusType -ne 'USB') {
@@ -633,22 +617,13 @@ function Start-UsbCreation {
         Write-Log $UI "---  Mount ISO  ---" "Cyan"
         Write-Log $UI "File: $([System.IO.Path]::GetFileName($IsoPath))"
         $mountISO  = Mount-DiskImage -ImagePath $IsoPath -StorageType ISO -PassThru -ErrorAction Stop
-
-        # Some systems take a moment before the mounted ISO receives a drive letter.
-        $isoVol = $null
-        for ($tries = 0; $tries -lt 20; $tries++) {
-            $isoVol = $mountISO | Get-Volume -ErrorAction SilentlyContinue
-            if ($isoVol -and $isoVol.DriveLetter) { break }
-            Start-Sleep -Milliseconds 500
-        }
+        Start-Sleep -Milliseconds 1000
+        $isoVol    = $mountISO | Get-Volume
         $isoDrive  = $isoVol.DriveLetter
-        if (-not $isoDrive) {
-            throw "Mounted ISO did not expose a drive letter. Try remounting the ISO and run again."
-        }
         Write-Log $UI "[OK]  ISO mounted at $isoDrive`:\" "Success"
 
         # -- 3. Detect Windows version ---------------------------------
-        Set-Progress $UI 7 "Detecting Windows version..."
+        Set-Progress $UI 7 "Detecting Windows version?"
         Write-Log $UI "---  Windows Detection  ---" "Cyan"
         $imgInfo = Get-InstallImageInfo $isoDrive
         Write-Log $UI "  Install image : $($imgInfo.Type)"
@@ -659,65 +634,48 @@ function Start-UsbCreation {
 
         # -- 4. Prepare disk -------------------------------------------
         if ($script:CancelRequested) { throw "Cancelled." }
-        Set-Progress $UI 10 "Preparing USB drive..."
+        Set-Progress $UI 10 "Preparing USB drive?"
         Write-Log $UI "---  Disk Preparation  ---" "Cyan"
-        Write-Log $UI "Clearing disk $($DiskObj.Number)..." "Warn"
-		
-        # Some USB sticks are left offline/read-only by previous tools.
-        # Ensure the disk is writable before attempting to wipe it.
-        $DiskObj | Set-Disk -IsOffline $false -ErrorAction SilentlyContinue
-        $DiskObj | Set-Disk -IsReadOnly $false -ErrorAction SilentlyContinue
+        Write-Log $UI "Clearing disk $($DiskObj.Number)?" "Warn"
 
         $DiskObj | Clear-Disk -RemoveData -Confirm:$false -ErrorAction Stop
         $DiskObj = Get-Disk -Number $DiskObj.Number
 
         $style = if ($UseGPT) { 'GPT' } else { 'MBR' }
-        Write-Log $UI "Initializing as $style..."
-        if ($DiskObj.PartitionStyle -ne 'RAW') {
-            throw "Disk did not reset to RAW after Clear-Disk. Try re-inserting the USB drive and run again."
+        Write-Log $UI "Initializing as $style?"
+        if ($DiskObj.PartitionStyle -eq 'RAW') {
+            $DiskObj | Initialize-Disk -PartitionStyle $style
+        } else {
+            $DiskObj | Set-Disk -PartitionStyle $style
         }
-
-        # IMPORTANT: use Initialize-Disk to set MBR/GPT.
-        # Set-Disk does not support -PartitionStyle and causes a common failure.
-        $DiskObj | Initialize-Disk -PartitionStyle $style -ErrorAction Stop
         $DiskObj = Get-Disk -Number $DiskObj.Number
         Write-Log $UI "[OK]  Disk initialized ($style)." "Success"
 
         # -- 5. Create partition & format ------------------------------
-        Set-Progress $UI 14 "Creating partition..."
+        Set-Progress $UI 14 "Creating partition?"
         Write-Log $UI "---  Partition & Format  ---" "Cyan"
 
+        $partSize  = $DiskObj.Size - 8MB   # small safety margin
         $fsLabel   = "WINUSB"
         $fs        = if ($UseNTFS) { "NTFS" } else { "FAT32" }
 
-        # Windows built-in FAT32 formatting often fails above 32 GB.
-        if (-not $UseNTFS -and $partSize -gt 32GB) {
-            $partSize = 32GB
-            Write-Log $UI "[!] FAT32 on Windows is limited to 32 GB. Creating a 32 GB FAT32 partition." "Warn"
-        }
-
-        Write-Log $UI "Creating $fs partition using maximum available disk space..."
+        Write-Log $UI "Creating $fs partition ($([Math]::Round($partSize/1GB,1)) GB)?"
 
         if ($UseGPT) {
-            # Use the EFI System Partition GUID on GPT so firmware can
-            # reliably detect this as a bootable UEFI partition.
-            # (Common failure: creating GPT as "basic data" can lead to
-            # systems skipping the USB as a UEFI boot target.)
-            $efiSystemPartitionGuid = '{C12A7328-F81F-11D2-BA4B-00A0C93EC93B}'
-            $partitionParams.GptType = $efiSystemPartitionGuid
+            $volume = $DiskObj |
+                New-Partition -Size $partSize -AssignDriveLetter |
+                Format-Volume -FileSystem $fs -NewFileSystemLabel $fsLabel -Force -Confirm:$false
         } else {
-            $partitionParams.IsActive = $true
+            $volume = $DiskObj |
+                New-Partition -Size $partSize -IsActive -AssignDriveLetter |
+                Format-Volume -FileSystem $fs -NewFileSystemLabel $fsLabel -Force -Confirm:$false
         }
-		
-        $volume = $DiskObj |
-            New-Partition @partitionParams |
-            Format-Volume -FileSystem $fs -NewFileSystemLabel $fsLabel -Force -Confirm:$false
         $usbDrive = $volume.DriveLetter
         Write-Log $UI "[OK]  Partition ready: $usbDrive`:\ ($fs)" "Success"
 
         # -- 6. Copy files with Robocopy -------------------------------
         if ($script:CancelRequested) { throw "Cancelled." }
-        Set-Progress $UI 18 "Copying Windows files via Robocopy (multi-threaded)..."
+        Set-Progress $UI 18 "Copying Windows files via Robocopy (multi-threaded)?"
         Write-Log $UI "---  File Copy  ---" "Cyan"
         Write-Log $UI "Source -> $isoDrive`:\   Destination -> $usbDrive`:\"
         Write-Log $UI "Excluding install.wim / install.esd  (handled separately)"
@@ -743,11 +701,9 @@ function Start-UsbCreation {
             if ($script:CancelRequested) { try { $roboJob.Kill() } catch {}; throw "Cancelled." }
             $elapsed = ((Get-Date) - $rStart).TotalSeconds
             $estPct  = [Math]::Min(18 + [int]($elapsed / 2), 48)
-            Set-Progress $UI $estPct "Copying files... ($([int]$elapsed)s elapsed)"
+            Set-Progress $UI $estPct "Copying files? ($([int]$elapsed)s elapsed)"
             Start-Sleep -Milliseconds 400
         }
-
-        $roboJob.WaitForExit()
 
         # Robocopy exit codes: 0-7 are success (0=no changes, 1=copied, etc.)
         if ($roboJob.ExitCode -gt 7) {
@@ -759,7 +715,7 @@ function Start-UsbCreation {
         $wimSource = ""
         if ($imgInfo.Type -eq "ESD") {
             if ($script:CancelRequested) { throw "Cancelled." }
-            Set-Progress $UI 52 "Converting install.esd -> install.wim..."
+            Set-Progress $UI 52 "Converting install.esd -> install.wim?"
             Write-Log $UI "---  ESD -> WIM Conversion  ---" "Cyan"
             Write-Log $UI "This may take 5 - 20 minutes depending on drive speed." "Warn"
 
@@ -769,8 +725,7 @@ function Start-UsbCreation {
 
             # Get all indexes in ESD
             $rawInfo = & dism /Get-WimInfo "/WimFile:$esdFile" 2>&1
-            $rawInfoText = ($rawInfo | Out-String)
-            $indexes = [regex]::Matches($rawInfoText, "Index\s*:\s*(\d+)") |
+            $indexes = [regex]::Matches($rawInfo, "Index\s*:\s*(\d+)") |
                        ForEach-Object { $_.Groups[1].Value }
 
             if ($indexes.Count -eq 0) {
@@ -782,7 +737,7 @@ function Start-UsbCreation {
                 if ($script:CancelRequested) { throw "Cancelled." }
                 $idx    = $indexes[$i]
                 $basePct= 52 + [int](($i / $indexes.Count) * 18)
-                Write-Log $UI "  Exporting index $idx / $($indexes.Count)..."
+                Write-Log $UI "  Exporting index $idx / $($indexes.Count)?"
 
                 $dismArgs = "/Export-Image " +
                             "/SourceImageFile:`"$esdFile`" " +
@@ -821,8 +776,8 @@ function Start-UsbCreation {
 
             if ((-not $UseNTFS) -and ($wimBytes -gt 4GB)) {
                 # FAT32 + large WIM - must split
-                Set-Progress $UI 72 "Splitting install.wim for FAT32 compatibility..."
-                Write-Log $UI "WIM > 4 GB on FAT32 - splitting into .swm files..." "Warn"
+                Set-Progress $UI 72 "Splitting install.wim for FAT32 compatibility?"
+                Write-Log $UI "WIM > 4 GB on FAT32 - splitting into .swm files?" "Warn"
 
                 $swmOut   = "$srcDir\install.swm"
                 $dismArgs = "/Split-Image " +
@@ -846,8 +801,8 @@ function Start-UsbCreation {
                 Write-Log $UI "[OK]  WIM split successfully." "Success"
             } else {
                 # NTFS or small WIM - copy directly
-                Set-Progress $UI 72 "Copying install.wim to USB..."
-                Write-Log $UI "Copying install.wim..."
+                Set-Progress $UI 72 "Copying install.wim to USB?"
+                Write-Log $UI "Copying install.wim?"
                 Copy-Item $wimSource "$srcDir\install.wim" -Force
                 Write-Log $UI "[OK]  install.wim copied." "Success"
             }
@@ -861,7 +816,7 @@ function Start-UsbCreation {
 
         # -- 9. Boot setup ---------------------------------------------
         if ($script:CancelRequested) { throw "Cancelled." }
-        Set-Progress $UI 90 "Configuring bootloader..."
+        Set-Progress $UI 90 "Configuring bootloader?"
         Write-Log $UI "---  Boot Configuration  ---" "Cyan"
 
         # ==============================================================
@@ -1113,27 +1068,13 @@ $form.Add_DragDrop({
     if ($iso) { Set-IsoPath $ui $iso }
 })
 
-# -- Drag & Drop on ISO textbox --------------------------------------
-$ui.TxtIso.Add_DragEnter({
-    param($s, $e)
-    if ($e.Data.GetDataPresent([System.Windows.Forms.DataFormats]::FileDrop)) {
-        $e.Effect = [System.Windows.Forms.DragDropEffects]::Copy
-    }
-})
-$ui.TxtIso.Add_DragDrop({
-    param($s, $e)
-    $files = $e.Data.GetData([System.Windows.Forms.DataFormats]::FileDrop)
-    $iso   = $files | Where-Object { $_ -match "\.iso$" } | Select-Object -First 1
-    if ($iso) { Set-IsoPath $ui $iso }
-})
-
 # -- Refresh button ---------------------------------------------------
 $ui.BtnRefresh.Add_Click({ Refresh-UsbList $ui })
 
 # -- Cancel button ----------------------------------------------------
 $ui.BtnCancel.Add_Click({
     $script:CancelRequested = $true
-    Write-Log $ui "Cancel requested - stopping after current step..." "Warn"
+    Write-Log $ui "Cancel requested - stopping after current step?" "Warn"
 })
 
 # -- Start button -----------------------------------------------------
