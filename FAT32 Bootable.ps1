@@ -704,14 +704,14 @@ function Start-UsbCreation {
             # (Common failure: creating GPT as "basic data" can lead to
             # systems skipping the USB as a UEFI boot target.)
             $efiSystemPartitionGuid = '{C12A7328-F81F-11D2-BA4B-00A0C93EC93B}'
-            $volume = $DiskObj |
-                New-Partition -UseMaximumSize -GptType $efiSystemPartitionGuid -AssignDriveLetter |
-                Format-Volume -FileSystem $fs -NewFileSystemLabel $fsLabel -Force -Confirm:$false
+            $partitionParams.GptType = $efiSystemPartitionGuid
         } else {
-            $volume = $DiskObj |
-                New-Partition -SUseMaximumSize -IsActive -AssignDriveLetter |
-                Format-Volume -FileSystem $fs -NewFileSystemLabel $fsLabel -Force -Confirm:$false
+            $partitionParams.IsActive = $true
         }
+		
+        $volume = $DiskObj |
+            New-Partition @partitionParams |
+            Format-Volume -FileSystem $fs -NewFileSystemLabel $fsLabel -Force -Confirm:$false
         $usbDrive = $volume.DriveLetter
         Write-Log $UI "[OK]  Partition ready: $usbDrive`:\ ($fs)" "Success"
 
