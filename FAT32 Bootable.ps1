@@ -707,16 +707,36 @@ function Start-UsbCreation {
                 Write-Log $UI "  diskpart: $_" "Muted"
             }
 
-            # Wait for re-enumeration after diskpart clean.
+            # Poll until the disk is both visible AND shows PartitionStyle RAW.
+            # Two separate delays are needed:
+            #   1. diskpart clean briefly takes the device offline (~0-2 s)
+            #      so Get-Disk may throw "No MSFT_Disk objects found" first.
+            #   2. Once the device is back, WMI can still report the old
+            #      partition style (MBR/GPT) for another ~2-4 s while the
+            #      storage driver flushes its metadata cache.
+            # Polling for RAW specifically handles both conditions in one loop.
+            Write-Log $UI "  Waiting for disk $diskNum to report RAW..." "Muted"
             $DiskObj = $null
-            for ($tries = 0; $tries -lt 30; $tries++) {
+            for ($tries = 0; $tries -lt 40; $tries++) {        # up to 20 s
                 try {
-                    $DiskObj = Get-Disk -Number $diskNum -ErrorAction Stop
-                    break
+                    $d = Get-Disk -Number $diskNum -ErrorAction Stop
+                    if ($d.PartitionStyle -eq 'RAW') {
+                        $DiskObj = $d
+                        break
+                    }
                 } catch {
-                    Start-Sleep -Milliseconds 500
+                    # Disk not yet visible - keep waiting.
                 }
+                Start-Sleep -Milliseconds 500
             }
+
+            if (-not $DiskObj) {
+                # Last-chance read: if the disk appeared but WMI is still
+                # lagging, grab whatever state it reports and let the check
+                # below throw a descriptive error.
+                try { $DiskObj = Get-Disk -Number $diskNum -ErrorAction Stop } catch {}
+            }
+
             if (-not $DiskObj) {
                 throw "Disk $diskNum did not re-appear after diskpart clean. Try re-inserting the USB drive."
             }
