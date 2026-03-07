@@ -179,7 +179,7 @@ function Build-GUI {
     $form.Controls.Add($cmbUsb)
 
     $btnRefresh                           = New-Object System.Windows.Forms.Button
-    $btnRefresh.Text                      = "R  Refresh"
+    $btnRefresh.Text                      = "Refresh"
     $btnRefresh.Location                  = New-Object System.Drawing.Point(548, 193)
     $btnRefresh.Size                      = New-Object System.Drawing.Size(132, 30)
     $btnRefresh.BackColor                 = $C.BG3
@@ -316,7 +316,7 @@ function Build-GUI {
     $form.Controls.Add($btnStart)
 
     $btnCancel                           = New-Object System.Windows.Forms.Button
-    $btnCancel.Text                      = "X  Cancel"
+    $btnCancel.Text                      = "Cancel"
     $btnCancel.Location                  = New-Object System.Drawing.Point(548, 685)
     $btnCancel.Size                      = New-Object System.Drawing.Size(132, 42)
     $btnCancel.BackColor                 = $C.Red
@@ -409,7 +409,12 @@ function Refresh-UsbList {
     $UI.CmbUsb.Items.Clear()
     $script:UsbDrives = @()
 
-    $disks = Get-Disk | Where-Object BusType -eq 'USB'
+    try {
+        $disks = Get-Disk -ErrorAction Stop | Where-Object BusType -eq 'USB'
+    } catch {
+        $UI.LblUsbWarn.Text = "Unable to enumerate disks. Run from elevated Windows PowerShell."
+        return
+    }
     foreach ($disk in $disks) {
         $sizeGB = [Math]::Round($disk.Size / 1GB, 1)
         $label  = ""
@@ -624,16 +629,22 @@ function Start-UsbCreation {
 
         # -- 2. Mount ISO ----------------------------------------------
         if ($script:CancelRequested) { throw "Cancelled." }
-        Set-Progress $UI 4 "Mounting ISO..."
+        Set-Progress $UI 4 "Mounting ISO?"
         Write-Log $UI "---  Mount ISO  ---" "Cyan"
         Write-Log $UI "File: $([System.IO.Path]::GetFileName($IsoPath))"
         $mountISO  = Mount-DiskImage -ImagePath $IsoPath -StorageType ISO -PassThru -ErrorAction Stop
-        Start-Sleep -Milliseconds 1000
-        $isoVol    = $mountISO | Get-Volume | Where-Object { $_.DriveLetter } | Select-Object -First 1
-        if (-not $isoVol) {
-            throw "Mounted ISO did not expose a drive letter."
+
+        # Some systems take a moment before the mounted ISO receives a drive letter.
+        $isoVol = $null
+        for ($tries = 0; $tries -lt 20; $tries++) {
+            $isoVol = $mountISO | Get-Volume -ErrorAction SilentlyContinue
+            if ($isoVol -and $isoVol.DriveLetter) { break }
+            Start-Sleep -Milliseconds 500
         }
         $isoDrive  = $isoVol.DriveLetter
+        if (-not $isoDrive) {
+            throw "Mounted ISO did not expose a drive letter. Try remounting the ISO and run again."
+        }
         Write-Log $UI "[OK]  ISO mounted at $isoDrive`:\" "Success"
 
         # -- 3. Detect Windows version ---------------------------------
@@ -651,17 +662,24 @@ function Start-UsbCreation {
         Set-Progress $UI 10 "Preparing USB drive..."
         Write-Log $UI "---  Disk Preparation  ---" "Cyan"
         Write-Log $UI "Clearing disk $($DiskObj.Number)..." "Warn"
+		
+        # Some USB sticks are left offline/read-only by previous tools.
+        # Ensure the disk is writable before attempting to wipe it.
+        $DiskObj | Set-Disk -IsOffline $false -ErrorAction SilentlyContinue
+        $DiskObj | Set-Disk -IsReadOnly $false -ErrorAction SilentlyContinue
 
         $DiskObj | Clear-Disk -RemoveData -Confirm:$false -ErrorAction Stop
         $DiskObj = Get-Disk -Number $DiskObj.Number
 
         $style = if ($UseGPT) { 'GPT' } else { 'MBR' }
         Write-Log $UI "Initializing as $style..."
-        if ($DiskObj.PartitionStyle -eq 'RAW') {
-            $DiskObj | Initialize-Disk -PartitionStyle $style
-        } else {
-            $DiskObj | Set-Disk -PartitionStyle $style
+        if ($DiskObj.PartitionStyle -ne 'RAW') {
+            throw "Disk did not reset to RAW after Clear-Disk. Try re-inserting the USB drive and run again."
         }
+
+        # IMPORTANT: use Initialize-Disk to set MBR/GPT.
+        # Set-Disk does not support -PartitionStyle and causes a common failure.
+        $DiskObj | Initialize-Disk -PartitionStyle $style -ErrorAction Stop
         $DiskObj = Get-Disk -Number $DiskObj.Number
         Write-Log $UI "[OK]  Disk initialized ($style)." "Success"
 
@@ -669,19 +687,29 @@ function Start-UsbCreation {
         Set-Progress $UI 14 "Creating partition..."
         Write-Log $UI "---  Partition & Format  ---" "Cyan"
 
-        $partSize  = $DiskObj.Size - 8MB   # small safety margin
         $fsLabel   = "WINUSB"
         $fs        = if ($UseNTFS) { "NTFS" } else { "FAT32" }
 
-        Write-Log $UI "Creating $fs partition ($([Math]::Round($partSize/1GB,1)) GB)..."
+        # Windows built-in FAT32 formatting often fails above 32 GB.
+        if (-not $UseNTFS -and $partSize -gt 32GB) {
+            $partSize = 32GB
+            Write-Log $UI "[!] FAT32 on Windows is limited to 32 GB. Creating a 32 GB FAT32 partition." "Warn"
+        }
+
+        Write-Log $UI "Creating $fs partition using maximum available disk space..."
 
         if ($UseGPT) {
+            # Use the EFI System Partition GUID on GPT so firmware can
+            # reliably detect this as a bootable UEFI partition.
+            # (Common failure: creating GPT as "basic data" can lead to
+            # systems skipping the USB as a UEFI boot target.)
+            $efiSystemPartitionGuid = '{C12A7328-F81F-11D2-BA4B-00A0C93EC93B}'
             $volume = $DiskObj |
-                New-Partition -Size $partSize -AssignDriveLetter |
+                New-Partition -UseMaximumSize -GptType $efiSystemPartitionGuid -AssignDriveLetter |
                 Format-Volume -FileSystem $fs -NewFileSystemLabel $fsLabel -Force -Confirm:$false
         } else {
             $volume = $DiskObj |
-                New-Partition -Size $partSize -IsActive -AssignDriveLetter |
+                New-Partition -SUseMaximumSize -IsActive -AssignDriveLetter |
                 Format-Volume -FileSystem $fs -NewFileSystemLabel $fsLabel -Force -Confirm:$false
         }
         $usbDrive = $volume.DriveLetter
@@ -741,7 +769,8 @@ function Start-UsbCreation {
 
             # Get all indexes in ESD
             $rawInfo = & dism /Get-WimInfo "/WimFile:$esdFile" 2>&1
-            $indexes = [regex]::Matches($rawInfo, "Index\s*:\s*(\d+)") |
+            $rawInfoText = ($rawInfo | Out-String)
+            $indexes = [regex]::Matches($rawInfoText, "Index\s*:\s*(\d+)") |
                        ForEach-Object { $_.Groups[1].Value }
 
             if ($indexes.Count -eq 0) {
