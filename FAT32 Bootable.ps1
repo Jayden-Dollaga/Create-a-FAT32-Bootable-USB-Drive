@@ -652,45 +652,77 @@ function Start-UsbCreation {
         if ($script:CancelRequested) { throw "Cancelled." }
         Set-Progress $UI 10 "Preparing USB drive..."
         Write-Log $UI "---  Disk Preparation  ---" "Cyan"
-        Write-Log $UI "Clearing disk $($DiskObj.Number)..." "Warn"
 
-        # BUG 4 FIX: USB sticks left offline or read-only by third-party
-        # tools (Ventoy, Rufus, etc.) will make Clear-Disk throw unless
-        # we ensure the disk is online and writable first.
+        # CRITICAL: Capture the disk number as a plain [int] RIGHT NOW,
+        # before any destructive operation.  Clear-Disk causes Windows to
+        # briefly remove and re-enumerate the USB device.  If we read
+        # $DiskObj.Number after that momentary disappearance the property
+        # is null, which breaks every subsequent Get-Disk / diskpart call.
+        [int]$diskNum = $DiskObj.Number
+        Write-Log $UI "Clearing disk $diskNum..." "Warn"
+
+        # Ensure the disk is online and writable first.  USB sticks left
+        # offline or read-only by Ventoy / Rufus will make Clear-Disk throw.
         $DiskObj | Set-Disk -IsOffline $false -ErrorAction SilentlyContinue
         $DiskObj | Set-Disk -IsReadOnly $false -ErrorAction SilentlyContinue
 
-        # Stage 1 – PowerShell Clear-Disk (non-fatal if it warns).
+        # Stage 1 – PowerShell Clear-Disk (non-fatal; it often warns on
+        # drives that are about to be re-enumerated).
         Write-Log $UI "  Running Clear-Disk..." "Muted"
         try {
             $DiskObj | Clear-Disk -RemoveData -Confirm:$false -ErrorAction Stop
         } catch {
             Write-Log $UI "  Clear-Disk warning: $($_.Exception.Message)" "Warn"
         }
-        $DiskObj = Get-Disk -Number $DiskObj.Number
 
-        # BUG 3 FIX: Clear-Disk does not always reset the partition style
-        # to RAW.  GPT drives keep a protective MBR; drives touched by
-        # Rufus/Ventoy stay GPT or MBR.  The original code then called
-        #   Set-Disk -PartitionStyle $style
-        # which is NOT a valid Set-Disk parameter and throws immediately.
-        # Fix: fall back to  diskpart clean  which is the definitive
-        # command for guaranteeing a RAW disk, then re-read the object.
+        # Stage 2 – Re-acquire the disk object with a retry loop.
+        # After Clear-Disk the USB device disappears from the storage stack
+        # for up to ~3 seconds while Windows re-enumerates it.  Polling
+        # here prevents the "No MSFT_Disk objects found" crash that occurred
+        # when Get-Disk ran while the device was still offline.
+        Write-Log $UI "  Waiting for disk $diskNum to re-enumerate..." "Muted"
+        $DiskObj = $null
+        for ($tries = 0; $tries -lt 30; $tries++) {
+            try {
+                $DiskObj = Get-Disk -Number $diskNum -ErrorAction Stop
+                break
+            } catch {
+                Start-Sleep -Milliseconds 500
+            }
+        }
+        if (-not $DiskObj) {
+            throw "Disk $diskNum did not re-appear after 15 seconds. Try re-inserting the USB drive and run again."
+        }
+        Write-Log $UI "  [OK] Disk $diskNum re-enumerated (style: $($DiskObj.PartitionStyle))." "Muted"
+
+        # Stage 3 – If still not RAW, run diskpart clean which is the
+        # definitive command for resetting a partition table.  GPT drives
+        # keep a protective MBR entry and won't be RAW after Clear-Disk alone.
         if ($DiskObj.PartitionStyle -ne 'RAW') {
-            Write-Log $UI "  Not RAW after Clear-Disk (style: $($DiskObj.PartitionStyle)) - running diskpart clean..." "Warn"
+            Write-Log $UI "  Not RAW (style: $($DiskObj.PartitionStyle)) - running diskpart clean..." "Warn"
 
-            $diskNum  = $DiskObj.Number
             $dpScript = "select disk $diskNum`nclean`nexit"
             $dpResult = $dpScript | & diskpart.exe 2>&1
             $dpResult | Where-Object { $_.ToString().Trim() -ne '' } | ForEach-Object {
                 Write-Log $UI "  diskpart: $_" "Muted"
             }
 
-            Start-Sleep -Milliseconds 1500
-            $DiskObj = Get-Disk -Number $diskNum
+            # Wait for re-enumeration after diskpart clean.
+            $DiskObj = $null
+            for ($tries = 0; $tries -lt 30; $tries++) {
+                try {
+                    $DiskObj = Get-Disk -Number $diskNum -ErrorAction Stop
+                    break
+                } catch {
+                    Start-Sleep -Milliseconds 500
+                }
+            }
+            if (-not $DiskObj) {
+                throw "Disk $diskNum did not re-appear after diskpart clean. Try re-inserting the USB drive."
+            }
 
             if ($DiskObj.PartitionStyle -ne 'RAW') {
-                throw "Disk is still not RAW after diskpart clean (style: $($DiskObj.PartitionStyle)). " +
+                throw "Disk $diskNum is still not RAW after diskpart clean (style: $($DiskObj.PartitionStyle)). " +
                       "Try ejecting and re-inserting the USB drive, then run again."
             }
             Write-Log $UI "  [OK] diskpart clean succeeded - disk is now RAW." "Success"
@@ -702,7 +734,8 @@ function Start-UsbCreation {
         Write-Log $UI "Initializing as $style..."
         $DiskObj | Initialize-Disk -PartitionStyle $style -ErrorAction Stop
         Start-Sleep -Milliseconds 800
-        $DiskObj = Get-Disk -Number $DiskObj.Number
+        # Use the saved [int]$diskNum — never read .Number from a stale object.
+        $DiskObj = Get-Disk -Number $diskNum
         Write-Log $UI "[OK]  Disk initialized ($style)." "Success"
 
         # -- 5. Create partition & format -----------------------------
