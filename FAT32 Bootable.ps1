@@ -1,23 +1,24 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    RufusPS - Advanced Windows USB Creator
+    RufusPS - Windows USB Creator  (FAT32-first)
 .DESCRIPTION
-    GUI-based bootable USB creator with:
+    GUI-based bootable USB creator focused on FAT32 Windows installation:
       * Full UEFI + Legacy BIOS support
-      * FAT32 (auto WIM-split) or NTFS
+      * FAT32 on any USB size (auto-splits WIM > 4 GB into .swm files)
+      * NTFS option (no 4 GB split needed)
       * MBR or GPT partition scheme
-      * install.wim and install.esd support (auto-converts ESD->WIM)
-      * Automatic WIM splitting for FAT32 (>4 GB files)
-      * EFI boot repair (fixes 0xc0000225 / winload.efi)
+      * install.wim and install.esd support (auto-converts ESD -> WIM)
+      * EFI boot repair (fixes 0xc0000225 / winload.efi errors)
       * Fast Robocopy multi-threaded file copy
       * Real-time DISM progress bars
+      * Pre-flight free-space checks (C: for ESD temp, USB for WIM)
       * USB safety checks (prevents wiping wrong disk)
       * Drag-and-drop ISO support
       * Auto admin elevation
       * Windows 10 / 11 / Server / Tiny11 compatible
 .NOTES
-    Run this script directly - it will auto-elevate to Administrator if needed.
+    Run directly - auto-elevates to Administrator if needed.
 #>
 
 # =====================================================================
@@ -236,7 +237,7 @@ function Build-GUI {
     $form.Controls.Add($pnlFileSys)
 
     $rbFAT32           = New-Object System.Windows.Forms.RadioButton
-    $rbFAT32.Text      = "FAT32  -  Universal  (UEFI + BIOS, auto-splits WIM > 4 GB)"
+    $rbFAT32.Text      = "FAT32  -  Universal UEFI + BIOS  (auto-splits WIM > 4 GB)"
     $rbFAT32.Location  = New-Object System.Drawing.Point(0, 4)
     $rbFAT32.Size      = New-Object System.Drawing.Size(360, 36)
     $rbFAT32.BackColor = $C.BG
@@ -245,7 +246,7 @@ function Build-GUI {
     $pnlFileSys.Controls.Add($rbFAT32)
 
     $rbNTFS           = New-Object System.Windows.Forms.RadioButton
-    $rbNTFS.Text      = "NTFS  -  No 4 GB limit  (BIOS only)"
+    $rbNTFS.Text      = "NTFS  -  No 4 GB limit  (BIOS / limited UEFI)"
     $rbNTFS.Location  = New-Object System.Drawing.Point(365, 4)
     $rbNTFS.Size      = New-Object System.Drawing.Size(295, 36)
     $rbNTFS.BackColor = $C.BG
@@ -394,8 +395,6 @@ function Set-Progress {
     [System.Windows.Forms.Application]::DoEvents()
 }
 
-# BUG 11 FIX: Added try/catch around Get-Disk so that a missing Storage
-# module shows a friendly warning instead of crashing the script.
 function Refresh-UsbList {
     param($UI)
     $UI.CmbUsb.Items.Clear()
@@ -437,8 +436,6 @@ function Refresh-UsbList {
     }
 }
 
-# BUG 12 FIX: Added .iso extension validation - non-ISO files were
-# silently accepted and would fail much later with a cryptic error.
 function Set-IsoPath {
     param($UI, [string]$Path)
     if (-not (Test-Path $Path)) { return }
@@ -492,8 +489,9 @@ function Invoke-DismWithProgress {
         [string]$Label
     )
 
-    $outFile = [System.IO.Path]::GetTempFileName()
-    $errFile = [System.IO.Path]::GetTempFileName()
+    $outFile  = [System.IO.Path]::GetTempFileName()
+    $errFile  = [System.IO.Path]::GetTempFileName()
+    $exitCode = 0   # default; set inside try before finally to avoid race
 
     $proc = Start-Process dism.exe `
         -ArgumentList $Arguments `
@@ -501,16 +499,13 @@ function Invoke-DismWithProgress {
         -RedirectStandardError  $errFile `
         -NoNewWindow -PassThru
 
-    $reader   = $null
-    $stream   = $null
-    $lastPct  = 0
-    # BUG 2 FIX: Use a local variable (not $script:LastDismExitCode) so
-    # the exit code is captured inside try before finally closes streams.
-    # The original read a script-scope var after finally ran - a race that
-    # could return null when DISM finished faster than the polling loop.
-    $exitCode = 0
+    $reader  = $null
+    $stream  = $null
+    $lastPct = 0
 
     try {
+        # Open the temp file for reading while DISM is still writing it.
+        # FileShare ReadWrite is required so DISM can keep writing.
         $stream = [System.IO.File]::Open(
             $outFile,
             [System.IO.FileMode]::Open,
@@ -527,11 +522,7 @@ function Invoke-DismWithProgress {
             }
 
             while ($null -ne ($line = $reader.ReadLine())) {
-                # BUG 1 FIX: Original regex was '(\d+\....\d*)%'.
-                # In regex '\.' means "any character" not a literal dot,
-                # and '....' means any 4 characters - so the pattern never
-                # matched real DISM lines like "10.0%" or "100%".
-                # Correct pattern uses '\.?' for an optional literal dot.
+                # Regex: optional literal dot between digits e.g. "10.0%" or "100%"
                 if ($line -match '(\d+\.?\d*)%') {
                     $pct = $BasePercent + [int]([double]$Matches[1] / 100 * $PercentRange)
                     if ($pct -ne $lastPct) {
@@ -553,10 +544,11 @@ function Invoke-DismWithProgress {
         # Start-Process -PassThru handles.
         $proc.WaitForExit()
 
-        # Capture exit code here, inside try, BEFORE finally closes streams.
+        # Capture exit code INSIDE try, BEFORE finally closes streams.
+        # Treat null (rare Start-Process race) as 0 = success.
         $exitCode = if ($null -eq $proc.ExitCode) { 0 } else { [int]$proc.ExitCode }
 
-        # Drain any remaining output after DISM exits.
+        # Drain any remaining output lines after DISM exits.
         while ($null -ne ($line = $reader.ReadLine())) {
             if ($line -match '(\d+\.?\d*)%') {
                 $pct = $BasePercent + [int]([double]$Matches[1] / 100 * $PercentRange)
@@ -595,27 +587,51 @@ function Start-UsbCreation {
     $UI.BtnCancel.Enabled   = $true
     $mountISO               = $null
     $isoDrive               = $null
+    # Declare $tempWim at function scope so finally always cleans it up
+    # even if an exception fires deep inside the try block.
     $tempWim                = $null
+
+    # Reset progress bar to 0 before every run (it retains its last value).
+    Set-Progress $UI 0 "Starting..."
 
     try {
 
-        # -- 1. Safety checks -----------------------------------------
+        # ----------------------------------------------------------------
+        # STEP 1  Safety checks
+        # ----------------------------------------------------------------
         Set-Progress $UI 2 "Running safety checks..."
         Write-Log $UI "---  Safety Checks  ---" "Cyan"
+
+        # FIX 1: Re-acquire a fresh disk object every time.
+        # $DiskObj was captured during Refresh-UsbList, potentially minutes
+        # ago.  Stale CIM objects return $null for BusType, Size, Number,
+        # etc., so safety checks and disk-number capture would silently
+        # operate on garbage data.  Always re-read from the storage stack.
+        $freshDisk = Get-Disk -Number $DiskObj.Number -ErrorAction SilentlyContinue
+        if (-not $freshDisk) {
+            throw "Could not re-acquire disk $($DiskObj.Number). Unplug and re-insert the USB drive, then click Refresh."
+        }
+        $DiskObj = $freshDisk
 
         if ($DiskObj.BusType -ne 'USB') {
             throw "SAFETY: The selected disk is not a USB drive."
         }
-        $systemDisk = Get-Disk | Where-Object { $_.IsSystem -or $_.IsBoot }
-        if ($DiskObj.Number -in $systemDisk.Number) {
+        $systemDisks = Get-Disk | Where-Object { $_.IsSystem -or $_.IsBoot }
+        if ($DiskObj.Number -in $systemDisks.Number) {
             throw "SAFETY: The selected disk contains a system or boot partition - aborting."
         }
-        if ($DiskObj.Size -lt 4GB) {
-            throw "SAFETY: USB drive is too small (< 4 GB)."
+
+        # BUG F FIX: 4 GB is too small for a Windows install ISO (Win11
+        # is 5-6 GB).  Raise the minimum to 8 GB and give a clear reason.
+        if ($DiskObj.Size -lt 8GB) {
+            throw "SAFETY: USB drive is too small ($([Math]::Round($DiskObj.Size/1GB,1)) GB). " +
+                  "Windows ISOs require at least 8 GB."
         }
         Write-Log $UI "[OK]  Safety checks passed." "Success"
 
-        # -- 2. Mount ISO ---------------------------------------------
+        # ----------------------------------------------------------------
+        # STEP 2  Mount ISO
+        # ----------------------------------------------------------------
         if ($script:CancelRequested) { throw "Cancelled." }
         Set-Progress $UI 4 "Mounting ISO..."
         Write-Log $UI "---  Mount ISO  ---" "Cyan"
@@ -623,9 +639,7 @@ function Start-UsbCreation {
 
         $mountISO = Mount-DiskImage -ImagePath $IsoPath -StorageType ISO -PassThru -ErrorAction Stop
 
-        # BUG 10 FIX: Original code slept 1 s then read DriveLetter once.
-        # On slower systems the volume isn't registered yet and $isoDrive
-        # is null, crashing all downstream paths. Poll up to 10 s instead.
+        # Poll up to 10 seconds for the mounted volume to receive a drive letter.
         $isoVol = $null
         for ($tries = 0; $tries -lt 20; $tries++) {
             $isoVol = $mountISO | Get-Volume -ErrorAction SilentlyContinue
@@ -638,36 +652,64 @@ function Start-UsbCreation {
         }
         Write-Log $UI "[OK]  ISO mounted at $isoDrive`:\" "Success"
 
-        # -- 3. Detect Windows version --------------------------------
+        # ----------------------------------------------------------------
+        # STEP 3  Detect Windows version and install image type
+        # ----------------------------------------------------------------
         Set-Progress $UI 7 "Detecting Windows version..."
         Write-Log $UI "---  Windows Detection  ---" "Cyan"
         $imgInfo = Get-InstallImageInfo $isoDrive
-        Write-Log $UI "  Install image : $($imgInfo.Type)"
+        Write-Log $UI "  Install image  : $($imgInfo.Type)"
         Write-Log $UI "  Windows edition: $($imgInfo.Version)"
         if ($imgInfo.Type -eq "None") {
             Write-Log $UI "[!]  No install.wim or install.esd found - proceeding anyway." "Warn"
         }
 
-        # -- 4. Prepare disk ------------------------------------------
+        # BUG C FIX: Before committing to ESD conversion, verify that
+        # $env:TEMP (usually C:\) has enough free space.  DISM expands an
+        # ESD into a WIM that is typically 1.5-2x the ESD file size.
+        # We require at least  esdSize * 2  free, minimum 8 GB.
+        if ($imgInfo.Type -eq "ESD") {
+            $esdBytes    = (Get-Item $imgInfo.Path).Length
+            $needBytes   = [Math]::Max($esdBytes * 2, 8GB)
+            $tempDrive   = [System.IO.Path]::GetPathRoot($env:TEMP).TrimEnd('\')[0]
+            $tempFree    = (Get-Volume -DriveLetter $tempDrive -ErrorAction SilentlyContinue).SizeRemaining
+            if ($tempFree -and $tempFree -lt $needBytes) {
+                throw ("Not enough free space on $tempDrive`:\ for ESD conversion. " +
+                       "Need $([Math]::Round($needBytes/1GB,1)) GB, " +
+                       "have $([Math]::Round($tempFree/1GB,1)) GB free. " +
+                       "Free up space on $tempDrive`:\ and try again.")
+            }
+            # Guard: $tempFree is null if Get-Volume failed (e.g. temp is on a
+            # RAM disk or network share).  Skip the log line in that case.
+            if ($tempFree) {
+                Write-Log $UI ("  [OK] Temp drive $tempDrive`:\ has " +
+                               "$([Math]::Round($tempFree/1GB,1)) GB free " +
+                               "(need $([Math]::Round($needBytes/1GB,1)) GB).") "Muted"
+            } else {
+                Write-Log $UI "  [!] Could not read free space on temp drive $tempDrive`:\  - proceeding anyway." "Warn"
+            }
+        }
+
+        # ----------------------------------------------------------------
+        # STEP 4  Wipe and prepare the USB disk
+        # ----------------------------------------------------------------
         if ($script:CancelRequested) { throw "Cancelled." }
         Set-Progress $UI 10 "Preparing USB drive..."
         Write-Log $UI "---  Disk Preparation  ---" "Cyan"
 
-        # CRITICAL: Capture the disk number as a plain [int] RIGHT NOW,
-        # before any destructive operation.  Clear-Disk causes Windows to
-        # briefly remove and re-enumerate the USB device.  If we read
-        # $DiskObj.Number after that momentary disappearance the property
-        # is null, which breaks every subsequent Get-Disk / diskpart call.
+        # Capture disk number NOW as a plain [int] before any destructive
+        # operation.  Clear-Disk causes a brief USB re-enumeration; if we
+        # read $DiskObj.Number after that the property can be null.
         [int]$diskNum = $DiskObj.Number
         Write-Log $UI "Clearing disk $diskNum..." "Warn"
 
-        # Ensure the disk is online and writable first.  USB sticks left
+        # Ensure the disk is online and writable.  USB sticks left
         # offline or read-only by Ventoy / Rufus will make Clear-Disk throw.
         $DiskObj | Set-Disk -IsOffline $false -ErrorAction SilentlyContinue
         $DiskObj | Set-Disk -IsReadOnly $false -ErrorAction SilentlyContinue
 
-        # Stage 1 – PowerShell Clear-Disk (non-fatal; it often warns on
-        # drives that are about to be re-enumerated).
+        # Stage 1: PowerShell Clear-Disk (non-fatal; often warns on drives
+        # that are about to be briefly re-enumerated by the storage stack).
         Write-Log $UI "  Running Clear-Disk..." "Muted"
         try {
             $DiskObj | Clear-Disk -RemoveData -Confirm:$false -ErrorAction Stop
@@ -675,11 +717,8 @@ function Start-UsbCreation {
             Write-Log $UI "  Clear-Disk warning: $($_.Exception.Message)" "Warn"
         }
 
-        # Stage 2 – Re-acquire the disk object with a retry loop.
-        # After Clear-Disk the USB device disappears from the storage stack
-        # for up to ~3 seconds while Windows re-enumerates it.  Polling
-        # here prevents the "No MSFT_Disk objects found" crash that occurred
-        # when Get-Disk ran while the device was still offline.
+        # Stage 2: Re-acquire the disk object.  After Clear-Disk the device
+        # can disappear from WMI for up to ~3 s while Windows re-enumerates.
         Write-Log $UI "  Waiting for disk $diskNum to re-enumerate..." "Muted"
         $DiskObj = $null
         for ($tries = 0; $tries -lt 30; $tries++) {
@@ -691,13 +730,13 @@ function Start-UsbCreation {
             }
         }
         if (-not $DiskObj) {
-            throw "Disk $diskNum did not re-appear after 15 seconds. Try re-inserting the USB drive and run again."
+            throw "Disk $diskNum did not re-appear after 15 seconds. Try re-inserting the USB drive."
         }
         Write-Log $UI "  [OK] Disk $diskNum re-enumerated (style: $($DiskObj.PartitionStyle))." "Muted"
 
-        # Stage 3 – If still not RAW, run diskpart clean which is the
-        # definitive command for resetting a partition table.  GPT drives
-        # keep a protective MBR entry and won't be RAW after Clear-Disk alone.
+        # Stage 3: If not RAW after Clear-Disk, use diskpart clean.
+        # GPT disks keep a protective MBR entry so Clear-Disk alone never
+        # gives RAW on them.  diskpart clean is the definitive fix.
         if ($DiskObj.PartitionStyle -ne 'RAW') {
             Write-Log $UI "  Not RAW (style: $($DiskObj.PartitionStyle)) - running diskpart clean..." "Warn"
 
@@ -707,17 +746,14 @@ function Start-UsbCreation {
                 Write-Log $UI "  diskpart: $_" "Muted"
             }
 
-            # Poll until the disk is both visible AND shows PartitionStyle RAW.
-            # Two separate delays are needed:
-            #   1. diskpart clean briefly takes the device offline (~0-2 s)
-            #      so Get-Disk may throw "No MSFT_Disk objects found" first.
-            #   2. Once the device is back, WMI can still report the old
-            #      partition style (MBR/GPT) for another ~2-4 s while the
-            #      storage driver flushes its metadata cache.
-            # Polling for RAW specifically handles both conditions in one loop.
+            # Poll until the disk is BOTH visible AND reporting RAW.
+            # After diskpart clean the device goes briefly offline (~0-2 s),
+            # then returns but WMI may still show the old style for ~2-4 s
+            # more while the storage driver flushes its metadata cache.
+            # Polling for RAW covers both delays in one loop.
             Write-Log $UI "  Waiting for disk $diskNum to report RAW..." "Muted"
             $DiskObj = $null
-            for ($tries = 0; $tries -lt 40; $tries++) {        # up to 20 s
+            for ($tries = 0; $tries -lt 40; $tries++) {       # up to 20 s
                 try {
                     $d = Get-Disk -Number $diskNum -ErrorAction Stop
                     if ($d.PartitionStyle -eq 'RAW') {
@@ -730,19 +766,17 @@ function Start-UsbCreation {
                 Start-Sleep -Milliseconds 500
             }
 
+            # Last-chance read: if the disk reappeared but WMI is still
+            # lagging let the check below emit a clear error.
             if (-not $DiskObj) {
-                # Last-chance read: if the disk appeared but WMI is still
-                # lagging, grab whatever state it reports and let the check
-                # below throw a descriptive error.
                 try { $DiskObj = Get-Disk -Number $diskNum -ErrorAction Stop } catch {}
             }
-
             if (-not $DiskObj) {
                 throw "Disk $diskNum did not re-appear after diskpart clean. Try re-inserting the USB drive."
             }
-
             if ($DiskObj.PartitionStyle -ne 'RAW') {
-                throw "Disk $diskNum is still not RAW after diskpart clean (style: $($DiskObj.PartitionStyle)). " +
+                throw "Disk $diskNum is still not RAW after diskpart clean " +
+                      "(style: $($DiskObj.PartitionStyle)). " +
                       "Try ejecting and re-inserting the USB drive, then run again."
             }
             Write-Log $UI "  [OK] diskpart clean succeeded - disk is now RAW." "Success"
@@ -754,53 +788,44 @@ function Start-UsbCreation {
         Write-Log $UI "Initializing as $style..."
         $DiskObj | Initialize-Disk -PartitionStyle $style -ErrorAction Stop
         Start-Sleep -Milliseconds 800
-        # Use the saved [int]$diskNum — never read .Number from a stale object.
-        $DiskObj = Get-Disk -Number $diskNum
+        $DiskObj = Get-Disk -Number $diskNum   # always use saved $diskNum
         Write-Log $UI "[OK]  Disk initialized ($style)." "Success"
 
-        # -- 5. Create partition & format -----------------------------
+        # ----------------------------------------------------------------
+        # STEP 5  Create partition and format
+        # ----------------------------------------------------------------
         Set-Progress $UI 14 "Creating partition..."
         Write-Log $UI "---  Partition & Format  ---" "Cyan"
 
-        $fsLabel = "WINUSB"
-        $fs      = if ($UseNTFS) { "NTFS" } else { "FAT32" }
+        $fsLabel  = "WINUSB"
+        $fs       = if ($UseNTFS) { "NTFS" } else { "FAT32" }
 
-        # BUG 5 FIX: The original used $DiskObj.Size - 8MB unconditionally.
-        # Windows cannot format FAT32 partitions > 32 GB and will fail.
-        # Cap at 32 GB when the user has chosen FAT32 on a large drive.
-        if (-not $UseNTFS -and $DiskObj.Size -gt 32GB) {
-            $partSize = 32GB
-            Write-Log $UI "[!] FAT32 capped at 32 GB (Windows FAT32 format limit)." "Warn"
-        } else {
-            $partSize = $DiskObj.Size - 8MB   # small alignment safety margin
-        }
+        # FIX 2: Use -UseMaximumSize instead of a calculated -Size.
+        # Computing $DiskObj.Size - 8MB and passing it as -Size fails on
+        # some drives where the controller reports a slightly smaller usable
+        # area than the disk size (GPT backup table, alignment reserves,
+        # bad-block sparing).  -UseMaximumSize always succeeds because
+        # Windows calculates the actual maximum internally.
+        Write-Log $UI "Creating $fs partition (maximum size)..."
 
-        Write-Log $UI "Creating $fs partition ($([Math]::Round($partSize / 1GB, 1)) GB)..."
-
-        # BUG 6 FIX: GPT branch used plain New-Partition with no GptType.
-        # Without the EFI System Partition GUID, UEFI firmware does not
-        # recognise the partition as a boot target and skips the drive.
-        #
-        # BUG 7 FIX: Piping New-Partition directly to Format-Volume gives
-        # no handle to call Add-PartitionAccessPath when Windows doesn't
-        # auto-assign a drive letter (common with GPT ESP partitions).
-        # Store the new partition in $newPart and assign the letter
-        # explicitly before formatting.
+        # GPT: tag with EFI System Partition GUID so UEFI firmware sees it.
+        # MBR: mark active (bootable) flag.
         if ($UseGPT) {
             $efiGuid = '{C12A7328-F81F-11D2-BA4B-00A0C93EC93B}'
-            $newPart = $DiskObj | New-Partition -Size $partSize -GptType $efiGuid -ErrorAction Stop
+            $newPart = $DiskObj | New-Partition -UseMaximumSize -GptType $efiGuid -ErrorAction Stop
         } else {
-            $newPart = $DiskObj | New-Partition -Size $partSize -IsActive -ErrorAction Stop
+            $newPart = $DiskObj | New-Partition -UseMaximumSize -IsActive -ErrorAction Stop
         }
 
         Start-Sleep -Milliseconds 800
 
-        # Assign a drive letter if Windows did not auto-assign one.
+        # Assign a drive letter if Windows did not auto-assign one (common
+        # with GPT ESP partitions).
         if (-not $newPart.DriveLetter) {
             Write-Log $UI "  Drive letter not auto-assigned - assigning now..." "Muted"
             $newPart | Add-PartitionAccessPath -AssignDriveLetter -ErrorAction Stop
             Start-Sleep -Milliseconds 500
-            $newPart = Get-Partition -DiskNumber $DiskObj.Number `
+            $newPart = Get-Partition -DiskNumber $diskNum `
                                      -PartitionNumber $newPart.PartitionNumber
         }
 
@@ -810,28 +835,87 @@ function Start-UsbCreation {
         }
 
         Write-Log $UI "Formatting as $fs (label: $fsLabel)..."
-        $newPart | Format-Volume -FileSystem $fs `
-                                 -NewFileSystemLabel $fsLabel `
-                                 -Force -Confirm:$false `
-                                 -ErrorAction Stop | Out-Null
+        # FIX 3: Some Windows 10 builds still enforce the 32 GB FAT32 limit
+        # in the Storage Management API that Format-Volume calls.  If it
+        # throws, fall back to diskpart's format command which has no such
+        # restriction on Windows 10/11.
+        $formatOk = $false
+        try {
+            $newPart | Format-Volume -FileSystem $fs `
+                                     -NewFileSystemLabel $fsLabel `
+                                     -Force -Confirm:$false `
+                                     -ErrorAction Stop | Out-Null
+            $formatOk = $true
+        } catch {
+            if (-not $UseNTFS) {
+                Write-Log $UI "  Format-Volume FAT32 failed ($($_.Exception.Message))." "Warn"
+                Write-Log $UI "  Retrying with diskpart format (no 32 GB limit)..." "Warn"
+                $dpFmt = @"
+select disk $diskNum
+select partition $($newPart.PartitionNumber)
+format fs=fat32 label=$fsLabel quick
+exit
+"@
+                $dpFmtOut = $dpFmt | & diskpart.exe 2>&1
+                $dpFmtOut | Where-Object { $_.ToString().Trim() -ne '' } |
+                    ForEach-Object { Write-Log $UI "  diskpart: $_" "Muted" }
+                # Verify the format succeeded by reading the volume back.
+                Start-Sleep -Milliseconds 800
+                $vol = Get-Partition -DiskNumber $diskNum -PartitionNumber $newPart.PartitionNumber |
+                       Get-Volume -ErrorAction SilentlyContinue
+                if ($vol -and $vol.FileSystem -eq 'FAT32') {
+                    $formatOk = $true
+                    Write-Log $UI "  [OK] diskpart FAT32 format succeeded." "Success"
+                } else {
+                    throw "diskpart FAT32 format also failed. The drive may be faulty."
+                }
+            } else {
+                throw
+            }
+        }
+        if (-not $formatOk) { throw "Format failed with no further details." }
 
         Write-Log $UI "[OK]  Partition ready: $usbDrive`:\ ($fs)" "Success"
 
-        # -- 6. Copy files with Robocopy ------------------------------
+        # ----------------------------------------------------------------
+        # STEP 6  Copy all ISO files except the install image (Robocopy)
+        # ----------------------------------------------------------------
         if ($script:CancelRequested) { throw "Cancelled." }
         Set-Progress $UI 18 "Copying Windows files via Robocopy (multi-threaded)..."
         Write-Log $UI "---  File Copy  ---" "Cyan"
         Write-Log $UI "Source -> $isoDrive`:\   Destination -> $usbDrive`:\"
         Write-Log $UI "Excluding install.wim / install.esd  (handled separately)"
 
+        # FIX 4: On FAT32, no single file may exceed 4 GB - 1 byte.
+        # Scan the ISO for any file (other than install.wim/esd which are
+        # handled separately) that would exceed this limit.  Robocopy would
+        # exit with code 8 on such files, but the error message is cryptic.
+        # Give the user a clear, actionable error before wasting time.
+        if (-not $UseNTFS) {
+            $fatLimit   = 4294967295   # 4 GiB - 1 byte
+            $largeFiles = Get-ChildItem -Path "$isoDrive`:\" -Recurse -File -ErrorAction SilentlyContinue |
+                          Where-Object {
+                              $_.Length -gt $fatLimit -and
+                              $_.Name -notmatch '^install\.(wim|esd)$'
+                          }
+            if ($largeFiles) {
+                $list = ($largeFiles | ForEach-Object {
+                    "  $($_.FullName)  ($([Math]::Round($_.Length/1GB,2)) GB)"
+                }) -join "`n"
+                throw ("FAT32 cannot store files larger than 4 GB, but the ISO contains:`n$list`n`n" +
+                       "These files are not install images and cannot be auto-split. " +
+                       "Use NTFS format for this ISO.")
+            }
+        }
+
         $roboArgs = @(
             "$isoDrive`:\", "$usbDrive`:\",
-            "/E",      # all subdirectories including empty
-            "/MT:16",  # 16 parallel threads
-            "/NJH",    # no job header
-            "/NJS",    # no job summary
-            "/NDL",    # no directory listing noise
-            "/NP",     # no per-file percentage
+            "/E",       # all subdirectories including empty
+            "/MT:16",   # 16 parallel threads
+            "/NJH",     # no job header
+            "/NJS",     # no job summary
+            "/NDL",     # no directory listing noise
+            "/NP",      # no per-file percentage
             "/XF", "install.wim", "install.esd"
         )
 
@@ -848,9 +932,7 @@ function Start-UsbCreation {
             Start-Sleep -Milliseconds 400
         }
 
-        # BUG 8 FIX: WaitForExit() must be called before ExitCode is
-        # reliable on Start-Process -PassThru handles. Without it, ExitCode
-        # can return null even after the process has finished.
+        # WaitForExit() required for ExitCode to be reliable on PassThru handles.
         $roboJob.WaitForExit()
 
         # Robocopy exit codes 0-7 are all success variants.
@@ -859,39 +941,43 @@ function Start-UsbCreation {
         }
         Write-Log $UI "[OK]  Files copied successfully." "Success"
 
-        # -- 7. Handle ESD -> WIM conversion --------------------------
+        # ----------------------------------------------------------------
+        # STEP 7  ESD -> WIM conversion (if needed)
+        # ----------------------------------------------------------------
         $wimSource = ""
+
         if ($imgInfo.Type -eq "ESD") {
             if ($script:CancelRequested) { throw "Cancelled." }
-            Set-Progress $UI 52 "Converting install.esd -> install.wim..."
+            Set-Progress $UI 50 "Converting install.esd -> install.wim..."
             Write-Log $UI "---  ESD -> WIM Conversion  ---" "Cyan"
-            Write-Log $UI "This may take 5 - 20 minutes depending on drive speed." "Warn"
+            Write-Log $UI "This may take 5-20 minutes depending on drive speed." "Warn"
 
             $esdFile = $imgInfo.Path
             $tempWim = "$env:TEMP\rufusps_install.wim"
             if (Test-Path $tempWim) { Remove-Item $tempWim -Force }
 
-            $rawInfo = & dism /Get-WimInfo "/WimFile:$esdFile" 2>&1
-
-            # BUG 9 FIX: $rawInfo is a string[] (one element per output line).
-            # Passing an array to [regex]::Matches() coerces it to a single
-            # string WITHOUT newlines between elements, causing the "Index :"
-            # pattern to span what were originally separate lines and fail to
-            # match. Pipe through Out-String first to get a properly
-            # newline-delimited string before running the regex.
+            # Get all indexes.  $rawInfo is a string[] so pipe through
+            # Out-String before regex to preserve newlines between elements.
+            $rawInfo     = & dism /Get-WimInfo "/WimFile:$esdFile" 2>&1
             $rawInfoText = ($rawInfo | Out-String)
-            $indexes = [regex]::Matches($rawInfoText, "Index\s*:\s*(\d+)") |
-                       ForEach-Object { $_.Groups[1].Value }
+            $indexes     = [regex]::Matches($rawInfoText, "Index\s*:\s*(\d+)") |
+                           ForEach-Object { $_.Groups[1].Value }
 
             if ($indexes.Count -eq 0) {
                 throw "Could not enumerate indexes in install.esd."
             }
             Write-Log $UI "  Found $($indexes.Count) image index(es) in ESD."
 
+            # BUG H FIX: Distribute the 50->70 progress range evenly
+            # across ALL indexes so each one moves the bar, not just the
+            # last.  Previous code gave each index only 5% regardless of
+            # count, leaving the bar stuck at 52% for single-index ESDs.
+            $pctPerIndex = [int](20 / $indexes.Count)   # 20 points = 50..70
+
             for ($i = 0; $i -lt $indexes.Count; $i++) {
                 if ($script:CancelRequested) { throw "Cancelled." }
                 $idx     = $indexes[$i]
-                $basePct = 52 + [int](($i / $indexes.Count) * 18)
+                $basePct = 50 + ($i * $pctPerIndex)
                 Write-Log $UI "  Exporting index $idx / $($indexes.Count)..."
 
                 $dismArgs = "/Export-Image " +
@@ -900,7 +986,7 @@ function Start-UsbCreation {
                             "/DestinationImageFile:`"$tempWim`" " +
                             "/Compress:fast"
 
-                $code    = Invoke-DismWithProgress $UI $dismArgs $basePct 5 "Converting index $idx"
+                $code    = Invoke-DismWithProgress $UI $dismArgs $basePct $pctPerIndex "Converting index $idx"
                 $codeInt = if ($null -eq $code -or $code -eq '') { 0 } else { [int]$code }
                 if ($codeInt -gt 1) {
                     Write-Log $UI "  [!]  Index $idx returned code $codeInt - continuing." "Warn"
@@ -917,7 +1003,9 @@ function Start-UsbCreation {
             $wimSource = $imgInfo.Path
         }
 
-        # -- 8. Split or copy WIM -------------------------------------
+        # ----------------------------------------------------------------
+        # STEP 8  Copy or split the install image onto the USB
+        # ----------------------------------------------------------------
         if ($wimSource -ne "") {
             if ($script:CancelRequested) { throw "Cancelled." }
             $wimBytes = (Get-Item $wimSource).Length
@@ -929,15 +1017,34 @@ function Start-UsbCreation {
             $srcDir = "$usbDrive`:\sources"
             if (-not (Test-Path $srcDir)) { New-Item $srcDir -ItemType Directory | Out-Null }
 
+            # BUG D FIX: Check that the USB has enough free space before
+            # starting a potentially long copy/split that would fail midway
+            # with a cryptic "not enough disk space" DISM or Copy-Item error.
+            $usbFree      = (Get-Volume -DriveLetter $usbDrive -ErrorAction SilentlyContinue).SizeRemaining
+            $neededOnUsb  = $wimBytes + 200MB   # 200 MB safety headroom
+            if ($usbFree -and $usbFree -lt $neededOnUsb) {
+                throw ("Not enough free space on $usbDrive`:\ for the install image. " +
+                       "Need $([Math]::Round($neededOnUsb/1GB,1)) GB, " +
+                       "have $([Math]::Round($usbFree/1GB,1)) GB free.")
+            }
+
             if ((-not $UseNTFS) -and ($wimBytes -gt 4GB)) {
-                Set-Progress $UI 72 "Splitting install.wim for FAT32 compatibility..."
-                Write-Log $UI "WIM > 4 GB on FAT32 - splitting into .swm files..." "Warn"
+                # FAT32 cannot store files > 4 GB.  Split the WIM into
+                # 4096 MB .swm chunks.  Windows Setup automatically finds
+                # install*.swm files in \sources\ at setup time.
+                Set-Progress $UI 72 "Splitting install.wim for FAT32 (> 4 GB)..."
+                Write-Log $UI "WIM > 4 GB on FAT32 - splitting into .swm chunks..." "Warn"
 
                 $swmOut   = "$srcDir\install.swm"
                 $dismArgs = "/Split-Image " +
                             "/ImageFile:`"$wimSource`" " +
                             "/SWMFile:`"$swmOut`" " +
-                            "/FileSize:4096"
+                            "/FileSize:3900"
+                # NOTE: /FileSize is in MB.  FAT32 max file size is exactly
+                # 4 GiB - 1 byte (4,294,967,295 B = 4095.9999... MB).
+                # Using 4096 MB would produce a chunk of 4,294,967,296 B
+                # which is 1 byte over the FAT32 limit and unwritable.
+                # 3900 MB gives a safe ~196 MB margin.
 
                 $code      = Invoke-DismWithProgress $UI $dismArgs 72 18 "Splitting WIM"
                 $codeInt   = if ($null -eq $code -or $code -eq '') { 0 } else { [int]$code }
@@ -950,39 +1057,34 @@ function Start-UsbCreation {
                     throw "DISM reported success but no install.swm was created. Check disk space."
                 }
                 Write-Log $UI "[OK]  WIM split successfully." "Success"
+
             } else {
+                # NTFS, or FAT32 with a WIM that fits in one file (< 4 GB).
                 Set-Progress $UI 72 "Copying install.wim to USB..."
                 Write-Log $UI "Copying install.wim..."
-                Copy-Item $wimSource "$srcDir\install.wim" -Force
+                Copy-Item $wimSource "$srcDir\install.wim" -Force -ErrorAction Stop
                 Write-Log $UI "[OK]  install.wim copied." "Success"
             }
         }
 
-        if ($tempWim -and (Test-Path $tempWim)) {
-            Remove-Item $tempWim -Force -ErrorAction SilentlyContinue
-            Write-Log $UI "Temporary WIM removed." "Muted"
-        }
-
-        # -- 9. Boot setup --------------------------------------------
+        # ----------------------------------------------------------------
+        # STEP 9  Boot configuration
+        # ----------------------------------------------------------------
         if ($script:CancelRequested) { throw "Cancelled." }
         Set-Progress $UI 90 "Configuring bootloader..."
         Write-Log $UI "---  Boot Configuration  ---" "Cyan"
 
-        # STEP 9a - EFI file verification -----------------------------
+        # 9a  Ensure all critical EFI directories exist -----------------
         Write-Log $UI "--- Verifying EFI boot files ---" "Cyan"
-
-        $efiDirs = @(
-            "$usbDrive`:\EFI\Boot",
-            "$usbDrive`:\EFI\Microsoft\Boot",
-            "$usbDrive`:\boot"
-        )
-        foreach ($d in $efiDirs) {
+        foreach ($d in @("$usbDrive`:\EFI\Boot", "$usbDrive`:\EFI\Microsoft\Boot", "$usbDrive`:\boot")) {
             if (-not (Test-Path $d)) {
                 New-Item $d -ItemType Directory -Force | Out-Null
                 Write-Log $UI "  Created dir: $d" "Muted"
             }
         }
 
+        # Force-copy every critical EFI file from the ISO, overwriting
+        # anything that Robocopy may have placed (ensures freshest copy).
         $efiFilemap = @(
             @{ Src = "$isoDrive`:\efi\boot\bootx64.efi";
                Dst = "$usbDrive`:\EFI\Boot\bootx64.efi";
@@ -1006,7 +1108,6 @@ function Start-UsbCreation {
                Dst = "$usbDrive`:\bootmgr.efi";
                Label = "bootmgr.efi" }
         )
-
         foreach ($entry in $efiFilemap) {
             if (Test-Path $entry.Src) {
                 Copy-Item $entry.Src $entry.Dst -Force -ErrorAction SilentlyContinue
@@ -1016,49 +1117,56 @@ function Start-UsbCreation {
             }
         }
 
-        # STEP 9b - BCD store -----------------------------------------
-        Write-Log $UI "--- BCD store verification ---" "Cyan"
+        # 9b  BCD store ------------------------------------------------
+        Write-Log $UI "--- BCD store ---" "Cyan"
 
         $bcdSrc     = "$isoDrive`:\efi\microsoft\boot\bcd"
         $bcdDst     = "$usbDrive`:\EFI\Microsoft\Boot\BCD"
-        $bcdBoot    = "$usbDrive`:\boot\BCD"
         $bcdBootSrc = "$isoDrive`:\boot\bcd"
+        $bcdBootDst = "$usbDrive`:\boot\BCD"
 
         if (Test-Path $bcdSrc) {
             Copy-Item $bcdSrc $bcdDst -Force
-            Write-Log $UI "  [OK] EFI BCD copied from ISO." "Success"
+            Write-Log $UI "  [OK] EFI BCD copied." "Success"
         } else {
-            Write-Log $UI "  [!] EFI BCD not found in ISO - this is unusual." "Warn"
+            Write-Log $UI "  [!] EFI BCD not found in ISO." "Warn"
         }
 
         if (Test-Path $bcdBootSrc) {
-            Copy-Item $bcdBootSrc $bcdBoot -Force
-            Write-Log $UI "  [OK] BIOS BCD copied from ISO." "Success"
+            Copy-Item $bcdBootSrc $bcdBootDst -Force
+            Write-Log $UI "  [OK] BIOS BCD copied." "Success"
         }
 
+        # Sync entire \boot\ folder for full BIOS compatibility
+        # (bootsect.exe, fonts, resources, memtest, etc.)
         Write-Log $UI "  Syncing \\boot\\ folder..." "Muted"
         $bootRobo = Start-Process robocopy `
-            -ArgumentList @("$isoDrive`:\boot", "$usbDrive`:\boot", "/E", "/MT:8", "/NJH", "/NJS", "/NP") `
-            -PassThru -NoNewWindow -Wait
+            -ArgumentList @("$isoDrive`:\boot", "$usbDrive`:\boot",
+                            "/E", "/MT:8", "/NJH", "/NJS", "/NP") `
+            -PassThru -NoNewWindow
+        # BUG G FIX: WaitForExit() required before ExitCode is reliable
+        # on Start-Process -PassThru handles, even after -Wait is used.
+        # Changed to not use -Wait so we can call WaitForExit() explicitly.
+        $bootRobo.WaitForExit()
         if ($bootRobo.ExitCode -le 7) {
             Write-Log $UI "  [OK] \\boot\\ folder synced." "Success"
+        } else {
+            Write-Log $UI "  [!] \\boot\\ sync returned code $($bootRobo.ExitCode)." "Warn"
         }
 
-        # STEP 9c - BIOS boot sector ----------------------------------
+        # 9c  MBR/VBR boot sector (BIOS boot only) ---------------------
         if (-not $UseGPT) {
             Write-Log $UI "--- Writing BIOS boot sector (bootsect) ---" "Cyan"
 
-            $bootsectPaths = @(
-                "$usbDrive`:\boot\bootsect.exe",
-                "$isoDrive`:\boot\bootsect.exe"
-            )
-            $bootsectExe = $bootsectPaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+            $bootsectExe = @("$usbDrive`:\boot\bootsect.exe",
+                             "$isoDrive`:\boot\bootsect.exe") |
+                           Where-Object { Test-Path $_ } |
+                           Select-Object -First 1
 
             if ($bootsectExe) {
                 $bsOut = & "$bootsectExe" /nt60 "$usbDrive`:" /force /mbr 2>&1
-                $bsOut | Where-Object { $_.Trim() -ne "" } | ForEach-Object {
-                    Write-Log $UI "  bootsect: $_" "Muted"
-                }
+                $bsOut | Where-Object { $_.Trim() -ne "" } |
+                         ForEach-Object { Write-Log $UI "  bootsect: $_" "Muted" }
                 if ($LASTEXITCODE -eq 0 -or $null -eq $LASTEXITCODE) {
                     Write-Log $UI "  [OK] VBR + MBR boot code written." "Success"
                 } else {
@@ -1066,14 +1174,16 @@ function Start-UsbCreation {
                 }
             } else {
                 Write-Log $UI "  [!] bootsect.exe not found - BIOS boot may not work." "Warn"
-                Write-Log $UI "      Try running: bootsect /nt60 $usbDrive`: /force /mbr" "Warn"
+                Write-Log $UI "      Run manually: bootsect /nt60 $usbDrive`: /force /mbr" "Warn"
             }
         }
 
-        # STEP 9d - GPT ESP attributes --------------------------------
+        # 9d  GPT: set EFI System Partition attributes via diskpart -----
         if ($UseGPT) {
-            Write-Log $UI "--- Setting GPT ESP attributes via diskpart ---" "Cyan"
-            $diskNum = $DiskObj.Number
+            Write-Log $UI "--- Setting GPT ESP attributes ---" "Cyan"
+            # BUG E FIX: Use the already-captured [int]$diskNum instead of
+            # re-reading $DiskObj.Number (which shadows $diskNum and could
+            # read a stale value if $DiskObj was not refreshed recently).
             $partNum = (Get-Partition -DiskNumber $diskNum |
                         Where-Object { $_.DriveLetter -eq $usbDrive }).PartitionNumber
             if ($partNum) {
@@ -1088,7 +1198,7 @@ exit
             }
         }
 
-        # STEP 9e - Final sanity check --------------------------------
+        # 9e  Final sanity check ----------------------------------------
         Write-Log $UI "--- Final boot file check ---" "Cyan"
         $mustExist = @(
             "$usbDrive`:\EFI\Boot\bootx64.efi",
@@ -1107,16 +1217,18 @@ exit
         }
         if (-not $allGood) {
             Write-Log $UI "[!] Some boot files are missing. The USB may not boot on all systems." "Warn"
-            Write-Log $UI "    This usually means the ISO is non-standard (e.g. Tiny11 stripped build)." "Warn"
+            Write-Log $UI "    This is normal for stripped ISOs (e.g. Tiny11)." "Warn"
         }
 
-        # -- 10. Done -------------------------------------------------
+        # ----------------------------------------------------------------
+        # STEP 10  Done
+        # ----------------------------------------------------------------
         Set-Progress $UI 100 "[OK]  USB creation complete!"
         Write-Log $UI ""
         Write-Log $UI "+==========================================+" "Success"
-        Write-Log $UI "|   [OK]  USB IS READY!                   |" "Success"
+        Write-Log $UI "|   [OK]  USB IS READY TO BOOT!           |" "Success"
         Write-Log $UI "|   Drive      : $usbDrive`:\              |" "Success"
-        Write-Log $UI "|   Partition  : $(if ($UseGPT) {'GPT (UEFI only)'} else {'MBR (UEFI + BIOS)'})   |" "Success"
+        Write-Log $UI "|   Partition  : $(if ($UseGPT)  {'GPT (UEFI only)'} else {'MBR (UEFI + BIOS)'})   |" "Success"
         Write-Log $UI "|   File system: $(if ($UseNTFS) {'NTFS'} else {'FAT32'})                    |" "Success"
         Write-Log $UI "+==========================================+" "Success"
 
@@ -1143,10 +1255,22 @@ exit
         ) | Out-Null
 
     } finally {
+        # Always dismount the ISO so it does not stay locked.
         if ($mountISO) {
             try { Dismount-DiskImage -ImagePath $IsoPath -ErrorAction SilentlyContinue } catch {}
             Write-Log $UI "ISO dismounted." "Muted"
         }
+
+        # BUG B FIX: Clean up the temp WIM here in finally so it is
+        # ALWAYS deleted even if an exception fires during Step 8 (WIM
+        # split/copy) before the inline cleanup code could run.
+        # Previously the cleanup was inline between Steps 8 and 9 meaning
+        # any throw in Step 8 left a 6-9 GB file in $env:TEMP permanently.
+        if ($tempWim -and (Test-Path $tempWim)) {
+            try { Remove-Item $tempWim -Force -ErrorAction SilentlyContinue } catch {}
+            Write-Log $UI "Temporary WIM removed." "Muted"
+        }
+
         $UI.BtnStart.Enabled    = $true
         $UI.BtnCancel.Enabled   = $false
         $script:CancelRequested = $false
@@ -1185,8 +1309,7 @@ $form.Add_DragDrop({
     if ($iso) { Set-IsoPath $ui $iso }
 })
 
-# BUG 13 FIX: Drag & Drop events on the ISO textbox were never wired up,
-# so dropping a file onto the text box had no effect whatsoever.
+# -- Drag & Drop on ISO textbox ---------------------------------------
 $ui.TxtIso.Add_DragEnter({
     param($s, $e)
     if ($e.Data.GetDataPresent([System.Windows.Forms.DataFormats]::FileDrop)) {
@@ -1226,7 +1349,6 @@ $ui.BtnStart.Add_Click({
 
     $selDrive = $script:UsbDrives[$ui.CmbUsb.SelectedIndex]
 
-    # BUG 14 FIX: Dialog text ended with "Continue..." instead of "Continue?"
     $confirm = [System.Windows.Forms.MessageBox]::Show(
         "[!]  WARNING`n`nAll data on the following drive will be PERMANENTLY erased:`n`n" +
         "   $($selDrive.Display)`n`n" +
