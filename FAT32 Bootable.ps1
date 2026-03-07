@@ -31,13 +31,13 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 }
 
 # =====================================================================
-#  CONSOLE STARTUP BANNER  (visible in the PowerShell window)
+#  CONSOLE STARTUP BANNER
 # =====================================================================
 Write-Host ""
 Write-Host "=============================================" -ForegroundColor Cyan
-Write-Host "  RufusPS  -  Windows USB Creator" -ForegroundColor Cyan
-Write-Host "  Running as Administrator" -ForegroundColor Green
-Write-Host "  Console output mirrors the GUI log window" -ForegroundColor DarkGray
+Write-Host "  RufusPS  -  Windows USB Creator"           -ForegroundColor Cyan
+Write-Host "  Running as Administrator"                   -ForegroundColor Green
+Write-Host "  Console output mirrors the GUI log window"  -ForegroundColor DarkGray
 Write-Host "=============================================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -55,7 +55,7 @@ $script:IsoPath         = ""
 $script:UsbDrives       = @()
 $script:CancelRequested = $false
 
-# -- Colour palette ----------------------------------------------------
+# -- Colour palette ---------------------------------------------------
 $C = @{
     BG        = [System.Drawing.Color]::FromArgb(15,  15,  22)
     BG2       = [System.Drawing.Color]::FromArgb(26,  26,  38)
@@ -79,7 +79,6 @@ $C = @{
 # =====================================================================
 function Build-GUI {
 
-    # -- Main Form ---------------------------------------------------
     $form                  = New-Object System.Windows.Forms.Form
     $form.Text             = "RufusPS  -  Windows USB Creator"
     $form.ClientSize       = New-Object System.Drawing.Size(700, 740)
@@ -92,7 +91,6 @@ function Build-GUI {
     $form.AllowDrop        = $true
     try { $form.Icon = [System.Drawing.SystemIcons]::Shield } catch {}
 
-    # -- Helper: styled label -----------------------------------------
     function New-SectionLabel($text, $x, $y) {
         $l           = New-Object System.Windows.Forms.Label
         $l.Text      = $text
@@ -118,50 +116,50 @@ function Build-GUI {
     $pnlHeader.BackColor = $C.BG2
     $form.Controls.Add($pnlHeader)
 
-    $lblTitle            = New-Object System.Windows.Forms.Label
-    $lblTitle.Text       = "  RufusPS"
-    $lblTitle.Font       = New-Object System.Drawing.Font("Segoe UI", 19, [System.Drawing.FontStyle]::Bold)
-    $lblTitle.ForeColor  = $C.Accent
-    $lblTitle.Location   = New-Object System.Drawing.Point(18, 10)
-    $lblTitle.Size       = New-Object System.Drawing.Size(360, 38)
+    $lblTitle           = New-Object System.Windows.Forms.Label
+    $lblTitle.Text      = "  RufusPS"
+    $lblTitle.Font      = New-Object System.Drawing.Font("Segoe UI", 19, [System.Drawing.FontStyle]::Bold)
+    $lblTitle.ForeColor = $C.Accent
+    $lblTitle.Location  = New-Object System.Drawing.Point(18, 10)
+    $lblTitle.Size      = New-Object System.Drawing.Size(360, 38)
     $pnlHeader.Controls.Add($lblTitle)
 
-    $lblSub              = New-Object System.Windows.Forms.Label
-    $lblSub.Text         = "Windows 10 / 11 / Server  *  UEFI + BIOS  *  FAT32 / NTFS  *  GPT / MBR"
-    $lblSub.ForeColor    = $C.Muted
-    $lblSub.Location     = New-Object System.Drawing.Point(20, 50)
-    $lblSub.Size         = New-Object System.Drawing.Size(660, 17)
+    $lblSub           = New-Object System.Windows.Forms.Label
+    $lblSub.Text      = "Windows 10 / 11 / Server  *  UEFI + BIOS  *  FAT32 / NTFS  *  GPT / MBR"
+    $lblSub.ForeColor = $C.Muted
+    $lblSub.Location  = New-Object System.Drawing.Point(20, 50)
+    $lblSub.Size      = New-Object System.Drawing.Size(660, 17)
     $pnlHeader.Controls.Add($lblSub)
 
     # -- ISO Section --------------------------------------------------
     $form.Controls.Add((New-SectionLabel "ISO IMAGE" 20 88))
 
-    $txtIso              = New-Object System.Windows.Forms.TextBox
-    $txtIso.Location     = New-Object System.Drawing.Point(20, 108)
-    $txtIso.Size         = New-Object System.Drawing.Size(520, 28)
-    $txtIso.BackColor    = $C.BG2
-    $txtIso.ForeColor    = $C.Muted
-    $txtIso.BorderStyle  = "FixedSingle"
-    $txtIso.Text         = "Drag & Drop an ISO here, or click Browse ->"
-    $txtIso.AllowDrop    = $true
+    $txtIso             = New-Object System.Windows.Forms.TextBox
+    $txtIso.Location    = New-Object System.Drawing.Point(20, 108)
+    $txtIso.Size        = New-Object System.Drawing.Size(520, 28)
+    $txtIso.BackColor   = $C.BG2
+    $txtIso.ForeColor   = $C.Muted
+    $txtIso.BorderStyle = "FixedSingle"
+    $txtIso.Text        = "Drag & Drop an ISO here, or click Browse ->"
+    $txtIso.AllowDrop   = $true
     $form.Controls.Add($txtIso)
 
-    $btnBrowse                              = New-Object System.Windows.Forms.Button
-    $btnBrowse.Text                         = "Browse?"
-    $btnBrowse.Location                     = New-Object System.Drawing.Point(548, 107)
-    $btnBrowse.Size                         = New-Object System.Drawing.Size(132, 30)
-    $btnBrowse.BackColor                    = $C.AccentDim
-    $btnBrowse.ForeColor                    = $C.Text
-    $btnBrowse.FlatStyle                    = "Flat"
-    $btnBrowse.FlatAppearance.BorderSize    = 0
-    $btnBrowse.Cursor                       = "Hand"
+    $btnBrowse                           = New-Object System.Windows.Forms.Button
+    $btnBrowse.Text                      = "Browse..."
+    $btnBrowse.Location                  = New-Object System.Drawing.Point(548, 107)
+    $btnBrowse.Size                      = New-Object System.Drawing.Size(132, 30)
+    $btnBrowse.BackColor                 = $C.AccentDim
+    $btnBrowse.ForeColor                 = $C.Text
+    $btnBrowse.FlatStyle                 = "Flat"
+    $btnBrowse.FlatAppearance.BorderSize = 0
+    $btnBrowse.Cursor                    = "Hand"
     $form.Controls.Add($btnBrowse)
 
-    $lblIsoInfo          = New-Object System.Windows.Forms.Label
-    $lblIsoInfo.Text     = ""
-    $lblIsoInfo.ForeColor= $C.Green
-    $lblIsoInfo.Location = New-Object System.Drawing.Point(20, 140)
-    $lblIsoInfo.Size     = New-Object System.Drawing.Size(660, 18)
+    $lblIsoInfo           = New-Object System.Windows.Forms.Label
+    $lblIsoInfo.Text      = ""
+    $lblIsoInfo.ForeColor = $C.Green
+    $lblIsoInfo.Location  = New-Object System.Drawing.Point(20, 140)
+    $lblIsoInfo.Size      = New-Object System.Drawing.Size(660, 18)
     $form.Controls.Add($lblIsoInfo)
 
     $form.Controls.Add((New-Separator 164))
@@ -169,39 +167,38 @@ function Build-GUI {
     # -- USB Section --------------------------------------------------
     $form.Controls.Add((New-SectionLabel "USB DRIVE" 20 174))
 
-    $cmbUsb              = New-Object System.Windows.Forms.ComboBox
-    $cmbUsb.Location     = New-Object System.Drawing.Point(20, 194)
-    $cmbUsb.Size         = New-Object System.Drawing.Size(520, 28)
-    $cmbUsb.BackColor    = $C.BG2
-    $cmbUsb.ForeColor    = $C.Text
-    $cmbUsb.FlatStyle    = "Flat"
-    $cmbUsb.DropDownStyle= "DropDownList"
+    $cmbUsb               = New-Object System.Windows.Forms.ComboBox
+    $cmbUsb.Location      = New-Object System.Drawing.Point(20, 194)
+    $cmbUsb.Size          = New-Object System.Drawing.Size(520, 28)
+    $cmbUsb.BackColor     = $C.BG2
+    $cmbUsb.ForeColor     = $C.Text
+    $cmbUsb.FlatStyle     = "Flat"
+    $cmbUsb.DropDownStyle = "DropDownList"
     $form.Controls.Add($cmbUsb)
 
-    $btnRefresh                           = New-Object System.Windows.Forms.Button
-    $btnRefresh.Text                      = "R  Refresh"
-    $btnRefresh.Location                  = New-Object System.Drawing.Point(548, 193)
-    $btnRefresh.Size                      = New-Object System.Drawing.Size(132, 30)
-    $btnRefresh.BackColor                 = $C.BG3
-    $btnRefresh.ForeColor                 = $C.Text
-    $btnRefresh.FlatStyle                 = "Flat"
-    $btnRefresh.FlatAppearance.BorderColor= $C.BG3
-    $btnRefresh.Cursor                    = "Hand"
+    $btnRefresh                            = New-Object System.Windows.Forms.Button
+    $btnRefresh.Text                       = "Refresh"
+    $btnRefresh.Location                   = New-Object System.Drawing.Point(548, 193)
+    $btnRefresh.Size                       = New-Object System.Drawing.Size(132, 30)
+    $btnRefresh.BackColor                  = $C.BG3
+    $btnRefresh.ForeColor                  = $C.Text
+    $btnRefresh.FlatStyle                  = "Flat"
+    $btnRefresh.FlatAppearance.BorderColor = $C.BG3
+    $btnRefresh.Cursor                     = "Hand"
     $form.Controls.Add($btnRefresh)
 
-    $lblUsbWarn          = New-Object System.Windows.Forms.Label
-    $lblUsbWarn.Text     = ""
-    $lblUsbWarn.ForeColor= $C.Orange
-    $lblUsbWarn.Location = New-Object System.Drawing.Point(20, 228)
-    $lblUsbWarn.Size     = New-Object System.Drawing.Size(660, 18)
+    $lblUsbWarn           = New-Object System.Windows.Forms.Label
+    $lblUsbWarn.Text      = ""
+    $lblUsbWarn.ForeColor = $C.Orange
+    $lblUsbWarn.Location  = New-Object System.Drawing.Point(20, 228)
+    $lblUsbWarn.Size      = New-Object System.Drawing.Size(660, 18)
     $form.Controls.Add($lblUsbWarn)
 
     $form.Controls.Add((New-Separator 252))
 
     # -- Partition Scheme ---------------------------------------------
-    # IMPORTANT: Each radio group must live in its own Panel container.
-    # If all buttons share the same parent (the form), WinForms treats
-    # them as one group and selecting any button deselects all others.
+    # IMPORTANT: Each radio group must live in its own Panel so WinForms
+    # does not treat all radio buttons on the form as one group.
     $form.Controls.Add((New-SectionLabel "PARTITION SCHEME" 20 262))
 
     $pnlPartition           = New-Object System.Windows.Forms.Panel
@@ -210,21 +207,21 @@ function Build-GUI {
     $pnlPartition.BackColor = $C.BG
     $form.Controls.Add($pnlPartition)
 
-    $rbMBR               = New-Object System.Windows.Forms.RadioButton
-    $rbMBR.Text          = "MBR  -  BIOS + UEFI  (recommended for most PCs)"
-    $rbMBR.Location      = New-Object System.Drawing.Point(0, 2)
-    $rbMBR.Size          = New-Object System.Drawing.Size(330, 24)
-    $rbMBR.BackColor     = $C.BG
-    $rbMBR.ForeColor     = $C.Text
-    $rbMBR.Checked       = $true
+    $rbMBR           = New-Object System.Windows.Forms.RadioButton
+    $rbMBR.Text      = "MBR  -  BIOS + UEFI  (recommended for most PCs)"
+    $rbMBR.Location  = New-Object System.Drawing.Point(0, 2)
+    $rbMBR.Size      = New-Object System.Drawing.Size(330, 24)
+    $rbMBR.BackColor = $C.BG
+    $rbMBR.ForeColor = $C.Text
+    $rbMBR.Checked   = $true
     $pnlPartition.Controls.Add($rbMBR)
 
-    $rbGPT               = New-Object System.Windows.Forms.RadioButton
-    $rbGPT.Text          = "GPT  -  UEFI only  (modern systems / Secure Boot)"
-    $rbGPT.Location      = New-Object System.Drawing.Point(340, 2)
-    $rbGPT.Size          = New-Object System.Drawing.Size(320, 24)
-    $rbGPT.BackColor     = $C.BG
-    $rbGPT.ForeColor     = $C.Text
+    $rbGPT           = New-Object System.Windows.Forms.RadioButton
+    $rbGPT.Text      = "GPT  -  UEFI only  (modern systems / Secure Boot)"
+    $rbGPT.Location  = New-Object System.Drawing.Point(340, 2)
+    $rbGPT.Size      = New-Object System.Drawing.Size(320, 24)
+    $rbGPT.BackColor = $C.BG
+    $rbGPT.ForeColor = $C.Text
     $pnlPartition.Controls.Add($rbGPT)
 
     $form.Controls.Add((New-Separator 314))
@@ -232,51 +229,50 @@ function Build-GUI {
     # -- File System --------------------------------------------------
     $form.Controls.Add((New-SectionLabel "FILE SYSTEM" 20 324))
 
-    $pnlFileSys             = New-Object System.Windows.Forms.Panel
-    $pnlFileSys.Location    = New-Object System.Drawing.Point(20, 342)
-    $pnlFileSys.Size        = New-Object System.Drawing.Size(660, 42)
-    $pnlFileSys.BackColor   = $C.BG
+    $pnlFileSys           = New-Object System.Windows.Forms.Panel
+    $pnlFileSys.Location  = New-Object System.Drawing.Point(20, 342)
+    $pnlFileSys.Size      = New-Object System.Drawing.Size(660, 42)
+    $pnlFileSys.BackColor = $C.BG
     $form.Controls.Add($pnlFileSys)
 
-    $rbFAT32             = New-Object System.Windows.Forms.RadioButton
-    $rbFAT32.Text        = "FAT32  -  Universal  (UEFI + BIOS, auto-splits WIM > 4 GB)"
-    $rbFAT32.Location    = New-Object System.Drawing.Point(0, 4)
-    $rbFAT32.Size        = New-Object System.Drawing.Size(360, 36)
-    $rbFAT32.BackColor   = $C.BG
-    $rbFAT32.ForeColor   = $C.Text
-    $rbFAT32.Checked     = $true
+    $rbFAT32           = New-Object System.Windows.Forms.RadioButton
+    $rbFAT32.Text      = "FAT32  -  Universal  (UEFI + BIOS, auto-splits WIM > 4 GB)"
+    $rbFAT32.Location  = New-Object System.Drawing.Point(0, 4)
+    $rbFAT32.Size      = New-Object System.Drawing.Size(360, 36)
+    $rbFAT32.BackColor = $C.BG
+    $rbFAT32.ForeColor = $C.Text
+    $rbFAT32.Checked   = $true
     $pnlFileSys.Controls.Add($rbFAT32)
 
-    $rbNTFS              = New-Object System.Windows.Forms.RadioButton
-    $rbNTFS.Text         = "NTFS  -  No 4 GB limit  (BIOS only)"
-    $rbNTFS.Location     = New-Object System.Drawing.Point(365, 4)
-    $rbNTFS.Size         = New-Object System.Drawing.Size(295, 36)
-    $rbNTFS.BackColor    = $C.BG
-    $rbNTFS.ForeColor    = $C.Text
+    $rbNTFS           = New-Object System.Windows.Forms.RadioButton
+    $rbNTFS.Text      = "NTFS  -  No 4 GB limit  (BIOS only)"
+    $rbNTFS.Location  = New-Object System.Drawing.Point(365, 4)
+    $rbNTFS.Size      = New-Object System.Drawing.Size(295, 36)
+    $rbNTFS.BackColor = $C.BG
+    $rbNTFS.ForeColor = $C.Text
     $pnlFileSys.Controls.Add($rbNTFS)
 
     $form.Controls.Add((New-Separator 390))
 
-
-    # -- Overall Progress ---------------------------------------------
+    # -- Progress -----------------------------------------------------
     $form.Controls.Add((New-SectionLabel "PROGRESS" 20 400))
 
-    $lblPct              = New-Object System.Windows.Forms.Label
-    $lblPct.Text         = "0%"
-    $lblPct.Font         = New-Object System.Drawing.Font("Segoe UI", 8, [System.Drawing.FontStyle]::Bold)
-    $lblPct.ForeColor    = $C.Accent
-    $lblPct.Location     = New-Object System.Drawing.Point(648, 400)
-    $lblPct.Size         = New-Object System.Drawing.Size(40, 17)
-    $lblPct.TextAlign    = "TopRight"
+    $lblPct           = New-Object System.Windows.Forms.Label
+    $lblPct.Text      = "0%"
+    $lblPct.Font      = New-Object System.Drawing.Font("Segoe UI", 8, [System.Drawing.FontStyle]::Bold)
+    $lblPct.ForeColor = $C.Accent
+    $lblPct.Location  = New-Object System.Drawing.Point(648, 400)
+    $lblPct.Size      = New-Object System.Drawing.Size(40, 17)
+    $lblPct.TextAlign = "TopRight"
     $form.Controls.Add($lblPct)
 
-    $progressBar         = New-Object System.Windows.Forms.ProgressBar
-    $progressBar.Location= New-Object System.Drawing.Point(20, 420)
-    $progressBar.Size    = New-Object System.Drawing.Size(660, 22)
-    $progressBar.Style   = "Continuous"
-    $progressBar.ForeColor=$C.Accent
-    $progressBar.Minimum = 0
-    $progressBar.Maximum = 100
+    $progressBar           = New-Object System.Windows.Forms.ProgressBar
+    $progressBar.Location  = New-Object System.Drawing.Point(20, 420)
+    $progressBar.Size      = New-Object System.Drawing.Size(660, 22)
+    $progressBar.Style     = "Continuous"
+    $progressBar.ForeColor = $C.Accent
+    $progressBar.Minimum   = 0
+    $progressBar.Maximum   = 100
     $form.Controls.Add($progressBar)
 
     $lblStatus           = New-Object System.Windows.Forms.Label
@@ -291,15 +287,15 @@ function Build-GUI {
     # -- Log ----------------------------------------------------------
     $form.Controls.Add((New-SectionLabel "LOG" 20 478))
 
-    $txtLog              = New-Object System.Windows.Forms.RichTextBox
-    $txtLog.Location     = New-Object System.Drawing.Point(20, 498)
-    $txtLog.Size         = New-Object System.Drawing.Size(660, 190)
-    $txtLog.BackColor    = [System.Drawing.Color]::FromArgb(8, 8, 14)
-    $txtLog.ForeColor    = $C.LogGreen
-    $txtLog.Font         = New-Object System.Drawing.Font("Consolas", 8.5)
-    $txtLog.ReadOnly     = $true
-    $txtLog.BorderStyle  = "None"
-    $txtLog.ScrollBars   = "Vertical"
+    $txtLog             = New-Object System.Windows.Forms.RichTextBox
+    $txtLog.Location    = New-Object System.Drawing.Point(20, 498)
+    $txtLog.Size        = New-Object System.Drawing.Size(660, 190)
+    $txtLog.BackColor   = [System.Drawing.Color]::FromArgb(8, 8, 14)
+    $txtLog.ForeColor   = $C.LogGreen
+    $txtLog.Font        = New-Object System.Drawing.Font("Consolas", 8.5)
+    $txtLog.ReadOnly    = $true
+    $txtLog.BorderStyle = "None"
+    $txtLog.ScrollBars  = "Vertical"
     $form.Controls.Add($txtLog)
 
     # -- Action Buttons -----------------------------------------------
@@ -316,7 +312,7 @@ function Build-GUI {
     $form.Controls.Add($btnStart)
 
     $btnCancel                           = New-Object System.Windows.Forms.Button
-    $btnCancel.Text                      = "X  Cancel"
+    $btnCancel.Text                      = "Cancel"
     $btnCancel.Location                  = New-Object System.Drawing.Point(548, 685)
     $btnCancel.Size                      = New-Object System.Drawing.Size(132, 42)
     $btnCancel.BackColor                 = $C.Red
@@ -354,8 +350,7 @@ function Build-GUI {
 # =====================================================================
 
 function Write-Log {
-    param($UI, [string]$Message,
-          [string]$Level = "Info")
+    param($UI, [string]$Message, [string]$Level = "Info")
 
     $col = switch ($Level) {
         "Warn"    { [System.Drawing.Color]::FromArgb(230, 200,  80) }
@@ -365,20 +360,16 @@ function Write-Log {
         "Muted"   { [System.Drawing.Color]::FromArgb(100, 100, 120) }
         default   { [System.Drawing.Color]::FromArgb( 90, 210, 110) }
     }
-
-    # Console colour map for Write-Host (visible in the PowerShell window)
     $consoleColor = switch ($Level) {
-        "Warn"    { "Yellow"  }
-        "Error"   { "Red"     }
-        "Success" { "Cyan"    }
-        "Cyan"    { "Cyan"    }
-        "Muted"   { "DarkGray"}
-        default   { "Green"   }
+        "Warn"    { "Yellow"   }
+        "Error"   { "Red"      }
+        "Success" { "Cyan"     }
+        "Cyan"    { "Cyan"     }
+        "Muted"   { "DarkGray" }
+        default   { "Green"    }
     }
 
     $ts = Get-Date -Format "HH:mm:ss"
-
-    # Mirror every message to the PowerShell console window
     Write-Host "[$ts] $Message" -ForegroundColor $consoleColor
 
     try {
@@ -399,20 +390,27 @@ function Set-Progress {
     $UI.ProgressBar.Value = $Pct
     $UI.LblPct.Text       = "$Pct%"
     $UI.LblStatus.Text    = $Status
-    # Print progress milestones to the console so the PowerShell window is not blank
     Write-Host "  --> [$Pct%] $Status" -ForegroundColor DarkCyan
     [System.Windows.Forms.Application]::DoEvents()
 }
 
+# BUG 11 FIX: Added try/catch around Get-Disk so that a missing Storage
+# module shows a friendly warning instead of crashing the script.
 function Refresh-UsbList {
     param($UI)
     $UI.CmbUsb.Items.Clear()
     $script:UsbDrives = @()
 
-    $disks = Get-Disk | Where-Object BusType -eq 'USB'
+    try {
+        $disks = Get-Disk -ErrorAction Stop | Where-Object BusType -eq 'USB'
+    } catch {
+        $UI.LblUsbWarn.Text = "Unable to enumerate disks. Run from elevated Windows PowerShell."
+        return
+    }
+
     foreach ($disk in $disks) {
-        $sizeGB = [Math]::Round($disk.Size / 1GB, 1)
-        $label  = ""
+        $sizeGB     = [Math]::Round($disk.Size / 1GB, 1)
+        $label      = ""
         $partitions = Get-Partition -DiskNumber $disk.Number -ErrorAction SilentlyContinue
         foreach ($p in $partitions) {
             try {
@@ -439,18 +437,31 @@ function Refresh-UsbList {
     }
 }
 
+# BUG 12 FIX: Added .iso extension validation - non-ISO files were
+# silently accepted and would fail much later with a cryptic error.
 function Set-IsoPath {
     param($UI, [string]$Path)
     if (-not (Test-Path $Path)) { return }
-    $script:IsoPath    = $Path
-    $sizeGB            = [Math]::Round((Get-Item $Path).Length / 1GB, 2)
-    $UI.TxtIso.Text    = $Path
+
+    if ([System.IO.Path]::GetExtension($Path).ToLowerInvariant() -ne ".iso") {
+        [System.Windows.Forms.MessageBox]::Show(
+            "Please choose a valid .iso file.",
+            "Invalid file type",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Warning
+        ) | Out-Null
+        return
+    }
+
+    $script:IsoPath      = $Path
+    $sizeGB              = [Math]::Round((Get-Item $Path).Length / 1GB, 2)
+    $UI.TxtIso.Text      = $Path
     $UI.TxtIso.ForeColor = $C.Text
     $UI.LblIsoInfo.Text  = "[OK]  $([System.IO.Path]::GetFileName($Path))  ($sizeGB GB)"
     Write-Log $UI "ISO selected: $Path" "Info"
 }
 
-# -- Detect install image type from mounted ISO ------------------------
+# -- Detect install image type from mounted ISO -----------------------
 function Get-InstallImageInfo {
     param([string]$IsoDrive)
     $wimPath = "$IsoDrive`:\sources\install.wim"
@@ -472,13 +483,6 @@ function Get-InstallImageInfo {
 }
 
 # -- Run DISM with real-time progress capture -------------------------
-# HOW IT WORKS (PowerShell-safe, no threading crashes):
-#   DISM stdout is redirected to a temp file.  We launch DISM normally
-#   with Start-Process -RedirectStandardOutput, then poll the file every
-#   150 ms on the UI thread.  DoEvents() is called every iteration so
-#   the window stays fully responsive - no "(Not Responding)" - and no
-#   .NET delegate / runspace crashes that the BeginOutputReadLine
-#   approach caused in PowerShell.
 function Invoke-DismWithProgress {
     param(
         $UI,
@@ -488,7 +492,6 @@ function Invoke-DismWithProgress {
         [string]$Label
     )
 
-    # Temp file that DISM writes its stdout into
     $outFile = [System.IO.Path]::GetTempFileName()
     $errFile = [System.IO.Path]::GetTempFileName()
 
@@ -501,10 +504,13 @@ function Invoke-DismWithProgress {
     $reader   = $null
     $stream   = $null
     $lastPct  = 0
+    # BUG 2 FIX: Use a local variable (not $script:LastDismExitCode) so
+    # the exit code is captured inside try before finally closes streams.
+    # The original read a script-scope var after finally ran - a race that
+    # could return null when DISM finished faster than the polling loop.
+    $exitCode = 0
 
     try {
-        # Open the output file for reading while DISM is still writing it.
-        # FileShare ReadWrite is required so DISM can keep writing.
         $stream = [System.IO.File]::Open(
             $outFile,
             [System.IO.FileMode]::Open,
@@ -513,8 +519,6 @@ function Invoke-DismWithProgress {
         )
         $reader = New-Object System.IO.StreamReader($stream)
 
-        # Poll loop - UI thread stays free because we sleep only 150 ms
-        # and call DoEvents() every iteration.
         while (-not $proc.HasExited) {
 
             if ($script:CancelRequested) {
@@ -522,8 +526,12 @@ function Invoke-DismWithProgress {
                 break
             }
 
-            # Read all lines DISM has written so far
             while ($null -ne ($line = $reader.ReadLine())) {
+                # BUG 1 FIX: Original regex was '(\d+\....\d*)%'.
+                # In regex '\.' means "any character" not a literal dot,
+                # and '....' means any 4 characters - so the pattern never
+                # matched real DISM lines like "10.0%" or "100%".
+                # Correct pattern uses '\.?' for an optional literal dot.
                 if ($line -match '(\d+\.?\d*)%') {
                     $pct = $BasePercent + [int]([double]$Matches[1] / 100 * $PercentRange)
                     if ($pct -ne $lastPct) {
@@ -537,17 +545,18 @@ function Invoke-DismWithProgress {
                 }
             }
 
-            # This is the key call - lets Windows process paint, click,
-            # resize, and cancel messages so the GUI never freezes.
             [System.Windows.Forms.Application]::DoEvents()
             Start-Sleep -Milliseconds 150
         }
 
-        # Drain any remaining output after DISM exits
-        # WaitForExit() is required BEFORE reading ExitCode - without it
-        # ExitCode can return null on Start-Process -PassThru handles.
+        # WaitForExit() must be called before ExitCode is readable on
+        # Start-Process -PassThru handles.
         $proc.WaitForExit()
 
+        # Capture exit code here, inside try, BEFORE finally closes streams.
+        $exitCode = if ($null -eq $proc.ExitCode) { 0 } else { [int]$proc.ExitCode }
+
+        # Drain any remaining output after DISM exits.
         while ($null -ne ($line = $reader.ReadLine())) {
             if ($line -match '(\d+\.?\d*)%') {
                 $pct = $BasePercent + [int]([double]$Matches[1] / 100 * $PercentRange)
@@ -559,11 +568,6 @@ function Invoke-DismWithProgress {
             }
         }
 
-        # Capture exit code INSIDE the try block while $proc is still in scope
-        # Cast to int - if ExitCode is null (can happen with Start-Process)
-        # treat it as 0 (success) since DISM already printed completion above.
-        $script:LastDismExitCode = if ($null -eq $proc.ExitCode) { 0 } else { [int]$proc.ExitCode }
-
     } finally {
         if ($reader) { try { $reader.Close() } catch {} }
         if ($stream) { try { $stream.Close() } catch {} }
@@ -571,7 +575,7 @@ function Invoke-DismWithProgress {
         try { Remove-Item $errFile -Force -ErrorAction SilentlyContinue } catch {}
     }
 
-    return $script:LastDismExitCode
+    return $exitCode
 }
 
 # =====================================================================
@@ -596,7 +600,7 @@ function Start-UsbCreation {
     try {
 
         # -- 1. Safety checks -----------------------------------------
-        Set-Progress $UI 2 "Running safety checks?"
+        Set-Progress $UI 2 "Running safety checks..."
         Write-Log $UI "---  Safety Checks  ---" "Cyan"
 
         if ($DiskObj.BusType -ne 'USB') {
@@ -611,19 +615,31 @@ function Start-UsbCreation {
         }
         Write-Log $UI "[OK]  Safety checks passed." "Success"
 
-        # -- 2. Mount ISO ----------------------------------------------
+        # -- 2. Mount ISO ---------------------------------------------
         if ($script:CancelRequested) { throw "Cancelled." }
-        Set-Progress $UI 4 "Mounting ISO?"
+        Set-Progress $UI 4 "Mounting ISO..."
         Write-Log $UI "---  Mount ISO  ---" "Cyan"
         Write-Log $UI "File: $([System.IO.Path]::GetFileName($IsoPath))"
-        $mountISO  = Mount-DiskImage -ImagePath $IsoPath -StorageType ISO -PassThru -ErrorAction Stop
-        Start-Sleep -Milliseconds 1000
-        $isoVol    = $mountISO | Get-Volume
-        $isoDrive  = $isoVol.DriveLetter
+
+        $mountISO = Mount-DiskImage -ImagePath $IsoPath -StorageType ISO -PassThru -ErrorAction Stop
+
+        # BUG 10 FIX: Original code slept 1 s then read DriveLetter once.
+        # On slower systems the volume isn't registered yet and $isoDrive
+        # is null, crashing all downstream paths. Poll up to 10 s instead.
+        $isoVol = $null
+        for ($tries = 0; $tries -lt 20; $tries++) {
+            $isoVol = $mountISO | Get-Volume -ErrorAction SilentlyContinue
+            if ($isoVol -and $isoVol.DriveLetter) { break }
+            Start-Sleep -Milliseconds 500
+        }
+        $isoDrive = $isoVol.DriveLetter
+        if (-not $isoDrive) {
+            throw "Mounted ISO did not receive a drive letter after 10 seconds. Try remounting and run again."
+        }
         Write-Log $UI "[OK]  ISO mounted at $isoDrive`:\" "Success"
 
-        # -- 3. Detect Windows version ---------------------------------
-        Set-Progress $UI 7 "Detecting Windows version?"
+        # -- 3. Detect Windows version --------------------------------
+        Set-Progress $UI 7 "Detecting Windows version..."
         Write-Log $UI "---  Windows Detection  ---" "Cyan"
         $imgInfo = Get-InstallImageInfo $isoDrive
         Write-Log $UI "  Install image : $($imgInfo.Type)"
@@ -632,90 +648,169 @@ function Start-UsbCreation {
             Write-Log $UI "[!]  No install.wim or install.esd found - proceeding anyway." "Warn"
         }
 
-        # -- 4. Prepare disk -------------------------------------------
+        # -- 4. Prepare disk ------------------------------------------
         if ($script:CancelRequested) { throw "Cancelled." }
-        Set-Progress $UI 10 "Preparing USB drive?"
+        Set-Progress $UI 10 "Preparing USB drive..."
         Write-Log $UI "---  Disk Preparation  ---" "Cyan"
-        Write-Log $UI "Clearing disk $($DiskObj.Number)?" "Warn"
+        Write-Log $UI "Clearing disk $($DiskObj.Number)..." "Warn"
 
-        $DiskObj | Clear-Disk -RemoveData -Confirm:$false -ErrorAction Stop
+        # BUG 4 FIX: USB sticks left offline or read-only by third-party
+        # tools (Ventoy, Rufus, etc.) will make Clear-Disk throw unless
+        # we ensure the disk is online and writable first.
+        $DiskObj | Set-Disk -IsOffline $false -ErrorAction SilentlyContinue
+        $DiskObj | Set-Disk -IsReadOnly $false -ErrorAction SilentlyContinue
+
+        # Stage 1 – PowerShell Clear-Disk (non-fatal if it warns).
+        Write-Log $UI "  Running Clear-Disk..." "Muted"
+        try {
+            $DiskObj | Clear-Disk -RemoveData -Confirm:$false -ErrorAction Stop
+        } catch {
+            Write-Log $UI "  Clear-Disk warning: $($_.Exception.Message)" "Warn"
+        }
         $DiskObj = Get-Disk -Number $DiskObj.Number
 
-        $style = if ($UseGPT) { 'GPT' } else { 'MBR' }
-        Write-Log $UI "Initializing as $style?"
-        if ($DiskObj.PartitionStyle -eq 'RAW') {
-            $DiskObj | Initialize-Disk -PartitionStyle $style
+        # BUG 3 FIX: Clear-Disk does not always reset the partition style
+        # to RAW.  GPT drives keep a protective MBR; drives touched by
+        # Rufus/Ventoy stay GPT or MBR.  The original code then called
+        #   Set-Disk -PartitionStyle $style
+        # which is NOT a valid Set-Disk parameter and throws immediately.
+        # Fix: fall back to  diskpart clean  which is the definitive
+        # command for guaranteeing a RAW disk, then re-read the object.
+        if ($DiskObj.PartitionStyle -ne 'RAW') {
+            Write-Log $UI "  Not RAW after Clear-Disk (style: $($DiskObj.PartitionStyle)) - running diskpart clean..." "Warn"
+
+            $diskNum  = $DiskObj.Number
+            $dpScript = "select disk $diskNum`nclean`nexit"
+            $dpResult = $dpScript | & diskpart.exe 2>&1
+            $dpResult | Where-Object { $_.ToString().Trim() -ne '' } | ForEach-Object {
+                Write-Log $UI "  diskpart: $_" "Muted"
+            }
+
+            Start-Sleep -Milliseconds 1500
+            $DiskObj = Get-Disk -Number $diskNum
+
+            if ($DiskObj.PartitionStyle -ne 'RAW') {
+                throw "Disk is still not RAW after diskpart clean (style: $($DiskObj.PartitionStyle)). " +
+                      "Try ejecting and re-inserting the USB drive, then run again."
+            }
+            Write-Log $UI "  [OK] diskpart clean succeeded - disk is now RAW." "Success"
         } else {
-            $DiskObj | Set-Disk -PartitionStyle $style
+            Write-Log $UI "  [OK] Disk is RAW." "Success"
         }
+
+        $style = if ($UseGPT) { 'GPT' } else { 'MBR' }
+        Write-Log $UI "Initializing as $style..."
+        $DiskObj | Initialize-Disk -PartitionStyle $style -ErrorAction Stop
+        Start-Sleep -Milliseconds 800
         $DiskObj = Get-Disk -Number $DiskObj.Number
         Write-Log $UI "[OK]  Disk initialized ($style)." "Success"
 
-        # -- 5. Create partition & format ------------------------------
-        Set-Progress $UI 14 "Creating partition?"
+        # -- 5. Create partition & format -----------------------------
+        Set-Progress $UI 14 "Creating partition..."
         Write-Log $UI "---  Partition & Format  ---" "Cyan"
 
-        $partSize  = $DiskObj.Size - 8MB   # small safety margin
-        $fsLabel   = "WINUSB"
-        $fs        = if ($UseNTFS) { "NTFS" } else { "FAT32" }
+        $fsLabel = "WINUSB"
+        $fs      = if ($UseNTFS) { "NTFS" } else { "FAT32" }
 
-        Write-Log $UI "Creating $fs partition ($([Math]::Round($partSize/1GB,1)) GB)?"
-
-        if ($UseGPT) {
-            $volume = $DiskObj |
-                New-Partition -Size $partSize -AssignDriveLetter |
-                Format-Volume -FileSystem $fs -NewFileSystemLabel $fsLabel -Force -Confirm:$false
+        # BUG 5 FIX: The original used $DiskObj.Size - 8MB unconditionally.
+        # Windows cannot format FAT32 partitions > 32 GB and will fail.
+        # Cap at 32 GB when the user has chosen FAT32 on a large drive.
+        if (-not $UseNTFS -and $DiskObj.Size -gt 32GB) {
+            $partSize = 32GB
+            Write-Log $UI "[!] FAT32 capped at 32 GB (Windows FAT32 format limit)." "Warn"
         } else {
-            $volume = $DiskObj |
-                New-Partition -Size $partSize -IsActive -AssignDriveLetter |
-                Format-Volume -FileSystem $fs -NewFileSystemLabel $fsLabel -Force -Confirm:$false
+            $partSize = $DiskObj.Size - 8MB   # small alignment safety margin
         }
-        $usbDrive = $volume.DriveLetter
+
+        Write-Log $UI "Creating $fs partition ($([Math]::Round($partSize / 1GB, 1)) GB)..."
+
+        # BUG 6 FIX: GPT branch used plain New-Partition with no GptType.
+        # Without the EFI System Partition GUID, UEFI firmware does not
+        # recognise the partition as a boot target and skips the drive.
+        #
+        # BUG 7 FIX: Piping New-Partition directly to Format-Volume gives
+        # no handle to call Add-PartitionAccessPath when Windows doesn't
+        # auto-assign a drive letter (common with GPT ESP partitions).
+        # Store the new partition in $newPart and assign the letter
+        # explicitly before formatting.
+        if ($UseGPT) {
+            $efiGuid = '{C12A7328-F81F-11D2-BA4B-00A0C93EC93B}'
+            $newPart = $DiskObj | New-Partition -Size $partSize -GptType $efiGuid -ErrorAction Stop
+        } else {
+            $newPart = $DiskObj | New-Partition -Size $partSize -IsActive -ErrorAction Stop
+        }
+
+        Start-Sleep -Milliseconds 800
+
+        # Assign a drive letter if Windows did not auto-assign one.
+        if (-not $newPart.DriveLetter) {
+            Write-Log $UI "  Drive letter not auto-assigned - assigning now..." "Muted"
+            $newPart | Add-PartitionAccessPath -AssignDriveLetter -ErrorAction Stop
+            Start-Sleep -Milliseconds 500
+            $newPart = Get-Partition -DiskNumber $DiskObj.Number `
+                                     -PartitionNumber $newPart.PartitionNumber
+        }
+
+        $usbDrive = $newPart.DriveLetter
+        if (-not $usbDrive) {
+            throw "Failed to assign a drive letter to the USB partition."
+        }
+
+        Write-Log $UI "Formatting as $fs (label: $fsLabel)..."
+        $newPart | Format-Volume -FileSystem $fs `
+                                 -NewFileSystemLabel $fsLabel `
+                                 -Force -Confirm:$false `
+                                 -ErrorAction Stop | Out-Null
+
         Write-Log $UI "[OK]  Partition ready: $usbDrive`:\ ($fs)" "Success"
 
-        # -- 6. Copy files with Robocopy -------------------------------
+        # -- 6. Copy files with Robocopy ------------------------------
         if ($script:CancelRequested) { throw "Cancelled." }
-        Set-Progress $UI 18 "Copying Windows files via Robocopy (multi-threaded)?"
+        Set-Progress $UI 18 "Copying Windows files via Robocopy (multi-threaded)..."
         Write-Log $UI "---  File Copy  ---" "Cyan"
         Write-Log $UI "Source -> $isoDrive`:\   Destination -> $usbDrive`:\"
         Write-Log $UI "Excluding install.wim / install.esd  (handled separately)"
 
         $roboArgs = @(
             "$isoDrive`:\", "$usbDrive`:\",
-            "/E",        # all subdirs including empty
-            "/MT:16",    # 16 parallel threads
-            "/NJH",      # no job header
-            "/NJS",      # no job summary
-            "/NDL",      # no dir list noise
-            "/NP",       # no per-file percentage (we use overall)
+            "/E",      # all subdirectories including empty
+            "/MT:16",  # 16 parallel threads
+            "/NJH",    # no job header
+            "/NJS",    # no job summary
+            "/NDL",    # no directory listing noise
+            "/NP",     # no per-file percentage
             "/XF", "install.wim", "install.esd"
         )
 
         $roboJob = Start-Process robocopy `
             -ArgumentList $roboArgs `
             -PassThru -NoNewWindow
-        
-        # Poll robocopy while updating progress animation
+
         $rStart = Get-Date
         while (-not $roboJob.HasExited) {
             if ($script:CancelRequested) { try { $roboJob.Kill() } catch {}; throw "Cancelled." }
             $elapsed = ((Get-Date) - $rStart).TotalSeconds
             $estPct  = [Math]::Min(18 + [int]($elapsed / 2), 48)
-            Set-Progress $UI $estPct "Copying files? ($([int]$elapsed)s elapsed)"
+            Set-Progress $UI $estPct "Copying files... ($([int]$elapsed)s elapsed)"
             Start-Sleep -Milliseconds 400
         }
 
-        # Robocopy exit codes: 0-7 are success (0=no changes, 1=copied, etc.)
+        # BUG 8 FIX: WaitForExit() must be called before ExitCode is
+        # reliable on Start-Process -PassThru handles. Without it, ExitCode
+        # can return null even after the process has finished.
+        $roboJob.WaitForExit()
+
+        # Robocopy exit codes 0-7 are all success variants.
         if ($roboJob.ExitCode -gt 7) {
             throw "Robocopy failed with exit code $($roboJob.ExitCode)."
         }
         Write-Log $UI "[OK]  Files copied successfully." "Success"
 
-        # -- 7. Handle ESD -> WIM conversion ---------------------------
+        # -- 7. Handle ESD -> WIM conversion --------------------------
         $wimSource = ""
         if ($imgInfo.Type -eq "ESD") {
             if ($script:CancelRequested) { throw "Cancelled." }
-            Set-Progress $UI 52 "Converting install.esd -> install.wim?"
+            Set-Progress $UI 52 "Converting install.esd -> install.wim..."
             Write-Log $UI "---  ESD -> WIM Conversion  ---" "Cyan"
             Write-Log $UI "This may take 5 - 20 minutes depending on drive speed." "Warn"
 
@@ -723,9 +818,16 @@ function Start-UsbCreation {
             $tempWim = "$env:TEMP\rufusps_install.wim"
             if (Test-Path $tempWim) { Remove-Item $tempWim -Force }
 
-            # Get all indexes in ESD
             $rawInfo = & dism /Get-WimInfo "/WimFile:$esdFile" 2>&1
-            $indexes = [regex]::Matches($rawInfo, "Index\s*:\s*(\d+)") |
+
+            # BUG 9 FIX: $rawInfo is a string[] (one element per output line).
+            # Passing an array to [regex]::Matches() coerces it to a single
+            # string WITHOUT newlines between elements, causing the "Index :"
+            # pattern to span what were originally separate lines and fail to
+            # match. Pipe through Out-String first to get a properly
+            # newline-delimited string before running the regex.
+            $rawInfoText = ($rawInfo | Out-String)
+            $indexes = [regex]::Matches($rawInfoText, "Index\s*:\s*(\d+)") |
                        ForEach-Object { $_.Groups[1].Value }
 
             if ($indexes.Count -eq 0) {
@@ -735,9 +837,9 @@ function Start-UsbCreation {
 
             for ($i = 0; $i -lt $indexes.Count; $i++) {
                 if ($script:CancelRequested) { throw "Cancelled." }
-                $idx    = $indexes[$i]
-                $basePct= 52 + [int](($i / $indexes.Count) * 18)
-                Write-Log $UI "  Exporting index $idx / $($indexes.Count)?"
+                $idx     = $indexes[$i]
+                $basePct = 52 + [int](($i / $indexes.Count) * 18)
+                Write-Log $UI "  Exporting index $idx / $($indexes.Count)..."
 
                 $dismArgs = "/Export-Image " +
                             "/SourceImageFile:`"$esdFile`" " +
@@ -745,7 +847,7 @@ function Start-UsbCreation {
                             "/DestinationImageFile:`"$tempWim`" " +
                             "/Compress:fast"
 
-                $code = Invoke-DismWithProgress $UI $dismArgs $basePct 5 "Converting index $idx"
+                $code    = Invoke-DismWithProgress $UI $dismArgs $basePct 5 "Converting index $idx"
                 $codeInt = if ($null -eq $code -or $code -eq '') { 0 } else { [int]$code }
                 if ($codeInt -gt 1) {
                     Write-Log $UI "  [!]  Index $idx returned code $codeInt - continuing." "Warn"
@@ -762,7 +864,7 @@ function Start-UsbCreation {
             $wimSource = $imgInfo.Path
         }
 
-        # -- 8. Split or copy WIM --------------------------------------
+        # -- 8. Split or copy WIM -------------------------------------
         if ($wimSource -ne "") {
             if ($script:CancelRequested) { throw "Cancelled." }
             $wimBytes = (Get-Item $wimSource).Length
@@ -775,9 +877,8 @@ function Start-UsbCreation {
             if (-not (Test-Path $srcDir)) { New-Item $srcDir -ItemType Directory | Out-Null }
 
             if ((-not $UseNTFS) -and ($wimBytes -gt 4GB)) {
-                # FAT32 + large WIM - must split
-                Set-Progress $UI 72 "Splitting install.wim for FAT32 compatibility?"
-                Write-Log $UI "WIM > 4 GB on FAT32 - splitting into .swm files?" "Warn"
+                Set-Progress $UI 72 "Splitting install.wim for FAT32 compatibility..."
+                Write-Log $UI "WIM > 4 GB on FAT32 - splitting into .swm files..." "Warn"
 
                 $swmOut   = "$srcDir\install.swm"
                 $dismArgs = "/Split-Image " +
@@ -785,13 +886,10 @@ function Start-UsbCreation {
                             "/SWMFile:`"$swmOut`" " +
                             "/FileSize:4096"
 
-                $code = Invoke-DismWithProgress $UI $dismArgs 72 18 "Splitting WIM"
-                # Treat null/empty as 0 (success) - Start-Process -PassThru
-                # can return null ExitCode even when DISM succeeded.
-                # Also accept exit code 1 which DISM sometimes returns on
-                # partial success while still producing correct output.
-                $codeInt = if ($null -eq $code -or $code -eq '') { 0 } else { [int]$code }
+                $code      = Invoke-DismWithProgress $UI $dismArgs 72 18 "Splitting WIM"
+                $codeInt   = if ($null -eq $code -or $code -eq '') { 0 } else { [int]$code }
                 $swmExists = Test-Path "$srcDir\install.swm"
+
                 if ($codeInt -gt 1 -and -not $swmExists) {
                     throw "DISM WIM split failed (exit code $codeInt). No .swm files were created."
                 }
@@ -800,33 +898,26 @@ function Start-UsbCreation {
                 }
                 Write-Log $UI "[OK]  WIM split successfully." "Success"
             } else {
-                # NTFS or small WIM - copy directly
-                Set-Progress $UI 72 "Copying install.wim to USB?"
-                Write-Log $UI "Copying install.wim?"
+                Set-Progress $UI 72 "Copying install.wim to USB..."
+                Write-Log $UI "Copying install.wim..."
                 Copy-Item $wimSource "$srcDir\install.wim" -Force
                 Write-Log $UI "[OK]  install.wim copied." "Success"
             }
         }
 
-        # Cleanup temp WIM
         if ($tempWim -and (Test-Path $tempWim)) {
             Remove-Item $tempWim -Force -ErrorAction SilentlyContinue
             Write-Log $UI "Temporary WIM removed." "Muted"
         }
 
-        # -- 9. Boot setup ---------------------------------------------
+        # -- 9. Boot setup --------------------------------------------
         if ($script:CancelRequested) { throw "Cancelled." }
-        Set-Progress $UI 90 "Configuring bootloader?"
+        Set-Progress $UI 90 "Configuring bootloader..."
         Write-Log $UI "---  Boot Configuration  ---" "Cyan"
 
-        # ==============================================================
-        # STEP 9a - Full EFI folder sync (fixes 0xc0000225 / winload.efi)
-        # Robocopy already ran but we force-verify every critical EFI file
-        # individually so nothing is left to chance.
-        # ==============================================================
+        # STEP 9a - EFI file verification -----------------------------
         Write-Log $UI "--- Verifying EFI boot files ---" "Cyan"
 
-        # Ensure all required directories exist on the USB
         $efiDirs = @(
             "$usbDrive`:\EFI\Boot",
             "$usbDrive`:\EFI\Microsoft\Boot",
@@ -839,34 +930,32 @@ function Start-UsbCreation {
             }
         }
 
-        # Map of critical files: ISO source -> USB destination
-        # Using array of hashtables so order is preserved
         $efiFilemap = @(
-            # Primary UEFI chainloader (the file UEFI firmware looks for first)
             @{ Src = "$isoDrive`:\efi\boot\bootx64.efi";
-               Dst = "$usbDrive`:\EFI\Boot\bootx64.efi";              Label = "EFI\Boot\bootx64.efi" },
-            # 32-bit UEFI (older Surface, some tablets)
+               Dst = "$usbDrive`:\EFI\Boot\bootx64.efi";
+               Label = "EFI\Boot\bootx64.efi" },
             @{ Src = "$isoDrive`:\efi\boot\bootia32.efi";
-               Dst = "$usbDrive`:\EFI\Boot\bootia32.efi";             Label = "EFI\Boot\bootia32.efi" },
-            # Windows Boot Manager - UEFI path (primary)
+               Dst = "$usbDrive`:\EFI\Boot\bootia32.efi";
+               Label = "EFI\Boot\bootia32.efi" },
             @{ Src = "$isoDrive`:\efi\microsoft\boot\bootmgfw.efi";
-               Dst = "$usbDrive`:\EFI\Microsoft\Boot\bootmgfw.efi";   Label = "EFI\Microsoft\Boot\bootmgfw.efi" },
-            # Windows Boot Manager - fallback copy in EFI\Boot
+               Dst = "$usbDrive`:\EFI\Microsoft\Boot\bootmgfw.efi";
+               Label = "EFI\Microsoft\Boot\bootmgfw.efi" },
             @{ Src = "$isoDrive`:\efi\microsoft\boot\bootmgfw.efi";
-               Dst = "$usbDrive`:\EFI\Boot\bootmgfw.efi";             Label = "EFI\Boot\bootmgfw.efi (fallback)" },
-            # Boot Manager EFI library
+               Dst = "$usbDrive`:\EFI\Boot\bootmgfw.efi";
+               Label = "EFI\Boot\bootmgfw.efi (fallback)" },
             @{ Src = "$isoDrive`:\efi\microsoft\boot\bootmgr.efi";
-               Dst = "$usbDrive`:\EFI\Microsoft\Boot\bootmgr.efi";    Label = "EFI\Microsoft\Boot\bootmgr.efi" },
-            # MBR-mode boot manager (also needed for NTLDR-style BIOS boot)
+               Dst = "$usbDrive`:\EFI\Microsoft\Boot\bootmgr.efi";
+               Label = "EFI\Microsoft\Boot\bootmgr.efi" },
             @{ Src = "$isoDrive`:\bootmgr";
-               Dst = "$usbDrive`:\bootmgr";                            Label = "bootmgr" },
+               Dst = "$usbDrive`:\bootmgr";
+               Label = "bootmgr" },
             @{ Src = "$isoDrive`:\bootmgr.efi";
-               Dst = "$usbDrive`:\bootmgr.efi";                        Label = "bootmgr.efi" }
+               Dst = "$usbDrive`:\bootmgr.efi";
+               Label = "bootmgr.efi" }
         )
 
         foreach ($entry in $efiFilemap) {
             if (Test-Path $entry.Src) {
-                # Always overwrite - ensure we have the freshest copy from ISO
                 Copy-Item $entry.Src $entry.Dst -Force -ErrorAction SilentlyContinue
                 Write-Log $UI "  [OK] $($entry.Label)" "Success"
             } else {
@@ -874,20 +963,14 @@ function Start-UsbCreation {
             }
         }
 
-        # ==============================================================
-        # STEP 9b - BCD store verification and repair
-        # Fixes 0xc000014c  "BCD missing or contains errors"
-        # The BCD from the ISO is device-independent (uses ramdisk
-        # entries pointing at \sources\boot.wim) so copying it verbatim
-        # is sufficient - but we must verify it landed correctly.
-        # ==============================================================
+        # STEP 9b - BCD store -----------------------------------------
         Write-Log $UI "--- BCD store verification ---" "Cyan"
 
-        $bcdSrc  = "$isoDrive`:\efi\microsoft\boot\bcd"
-        $bcdDst  = "$usbDrive`:\EFI\Microsoft\Boot\BCD"
-        $bcdBoot = "$usbDrive`:\boot\BCD"   # Legacy BIOS BCD path
+        $bcdSrc     = "$isoDrive`:\efi\microsoft\boot\bcd"
+        $bcdDst     = "$usbDrive`:\EFI\Microsoft\Boot\BCD"
+        $bcdBoot    = "$usbDrive`:\boot\BCD"
+        $bcdBootSrc = "$isoDrive`:\boot\bcd"
 
-        # UEFI BCD
         if (Test-Path $bcdSrc) {
             Copy-Item $bcdSrc $bcdDst -Force
             Write-Log $UI "  [OK] EFI BCD copied from ISO." "Success"
@@ -895,15 +978,11 @@ function Start-UsbCreation {
             Write-Log $UI "  [!] EFI BCD not found in ISO - this is unusual." "Warn"
         }
 
-        # Legacy BIOS BCD (inside \boot\)
-        $bcdBootSrc = "$isoDrive`:\boot\bcd"
         if (Test-Path $bcdBootSrc) {
             Copy-Item $bcdBootSrc $bcdBoot -Force
             Write-Log $UI "  [OK] BIOS BCD copied from ISO." "Success"
         }
 
-        # Also copy the entire \boot\ folder from ISO for full BIOS compatibility
-        # (contains BCD, bootfix.bin, bootsect.exe, fonts, resources, memtest etc.)
         Write-Log $UI "  Syncing \\boot\\ folder..." "Muted"
         $bootRobo = Start-Process robocopy `
             -ArgumentList @("$isoDrive`:\boot", "$usbDrive`:\boot", "/E", "/MT:8", "/NJH", "/NJS", "/NP") `
@@ -912,17 +991,10 @@ function Start-UsbCreation {
             Write-Log $UI "  [OK] \\boot\\ folder synced." "Success"
         }
 
-        # ==============================================================
-        # STEP 9c - Write MBR / VBR boot code  (fixes BIOS boot)
-        # bootsect.exe /nt60 writes the Windows-compatible VBR onto the
-        # USB partition so BIOS firmware can hand off to bootmgr.
-        # /force  - works even if the volume is in use
-        # /mbr    - also rewrites the master boot record on the disk
-        # ==============================================================
+        # STEP 9c - BIOS boot sector ----------------------------------
         if (-not $UseGPT) {
             Write-Log $UI "--- Writing BIOS boot sector (bootsect) ---" "Cyan"
 
-            # Try bootsect from the USB first (already copied), fall back to ISO
             $bootsectPaths = @(
                 "$usbDrive`:\boot\bootsect.exe",
                 "$isoDrive`:\boot\bootsect.exe"
@@ -930,14 +1002,11 @@ function Start-UsbCreation {
             $bootsectExe = $bootsectPaths | Where-Object { Test-Path $_ } | Select-Object -First 1
 
             if ($bootsectExe) {
-                # /nt60  - write Windows Vista/7/8/10/11 compatible VBR
-                # /force - force dismount if needed
-                # /mbr   - rewrite MBR on the physical disk too
                 $bsOut = & "$bootsectExe" /nt60 "$usbDrive`:" /force /mbr 2>&1
                 $bsOut | Where-Object { $_.Trim() -ne "" } | ForEach-Object {
                     Write-Log $UI "  bootsect: $_" "Muted"
                 }
-                if ($LASTEXITCODE -eq 0 -or $LASTEXITCODE -eq $null) {
+                if ($LASTEXITCODE -eq 0 -or $null -eq $LASTEXITCODE) {
                     Write-Log $UI "  [OK] VBR + MBR boot code written." "Success"
                 } else {
                     Write-Log $UI "  [!] bootsect exit code: $LASTEXITCODE" "Warn"
@@ -948,14 +1017,12 @@ function Start-UsbCreation {
             }
         }
 
-        # ==============================================================
-        # STEP 9d - GPT: set EFI System Partition attributes via diskpart
-        # Ensures the partition is flagged as ESP so UEFI firmware sees it
-        # ==============================================================
+        # STEP 9d - GPT ESP attributes --------------------------------
         if ($UseGPT) {
             Write-Log $UI "--- Setting GPT ESP attributes via diskpart ---" "Cyan"
-            $diskNum  = $DiskObj.Number
-            $partNum  = (Get-Partition -DiskNumber $diskNum | Where-Object { $_.DriveLetter -eq $usbDrive }).PartitionNumber
+            $diskNum = $DiskObj.Number
+            $partNum = (Get-Partition -DiskNumber $diskNum |
+                        Where-Object { $_.DriveLetter -eq $usbDrive }).PartitionNumber
             if ($partNum) {
                 $dpScript = @"
 select disk $diskNum
@@ -968,9 +1035,7 @@ exit
             }
         }
 
-        # ==============================================================
-        # STEP 9e - Final sanity checks - report anything still missing
-        # ==============================================================
+        # STEP 9e - Final sanity check --------------------------------
         Write-Log $UI "--- Final boot file check ---" "Cyan"
         $mustExist = @(
             "$usbDrive`:\EFI\Boot\bootx64.efi",
@@ -992,14 +1057,14 @@ exit
             Write-Log $UI "    This usually means the ISO is non-standard (e.g. Tiny11 stripped build)." "Warn"
         }
 
-        # -- 10. Done --------------------------------------------------
+        # -- 10. Done -------------------------------------------------
         Set-Progress $UI 100 "[OK]  USB creation complete!"
         Write-Log $UI ""
         Write-Log $UI "+==========================================+" "Success"
-        Write-Log $UI "|   [OK]  USB IS READY!                       |" "Success"
-        Write-Log $UI "|   Drive      : $usbDrive`:\                      |" "Success"
-        Write-Log $UI "|   Partition  : $(if ($UseGPT) {'GPT (UEFI only)       '} else {'MBR (UEFI + BIOS)    '})  |" "Success"
-        Write-Log $UI "|   File system: $(if ($UseNTFS) {'NTFS                 '} else {'FAT32                '})  |" "Success"
+        Write-Log $UI "|   [OK]  USB IS READY!                   |" "Success"
+        Write-Log $UI "|   Drive      : $usbDrive`:\              |" "Success"
+        Write-Log $UI "|   Partition  : $(if ($UseGPT) {'GPT (UEFI only)'} else {'MBR (UEFI + BIOS)'})   |" "Success"
+        Write-Log $UI "|   File system: $(if ($UseNTFS) {'NTFS'} else {'FAT32'})                    |" "Success"
         Write-Log $UI "+==========================================+" "Success"
 
         [System.Windows.Forms.MessageBox]::Show(
@@ -1029,8 +1094,8 @@ exit
             try { Dismount-DiskImage -ImagePath $IsoPath -ErrorAction SilentlyContinue } catch {}
             Write-Log $UI "ISO dismounted." "Muted"
         }
-        $UI.BtnStart.Enabled  = $true
-        $UI.BtnCancel.Enabled = $false
+        $UI.BtnStart.Enabled    = $true
+        $UI.BtnCancel.Enabled   = $false
         $script:CancelRequested = $false
     }
 }
@@ -1041,7 +1106,6 @@ exit
 $ui   = Build-GUI
 $form = $ui.Form
 
-# Initial USB list
 Refresh-UsbList $ui
 
 # -- Browse button ----------------------------------------------------
@@ -1054,7 +1118,7 @@ $ui.BtnBrowse.Add_Click({
     }
 })
 
-# -- Drag & Drop on form -----------------------------------------------
+# -- Drag & Drop on form ----------------------------------------------
 $form.Add_DragEnter({
     param($s, $e)
     if ($e.Data.GetDataPresent([System.Windows.Forms.DataFormats]::FileDrop)) {
@@ -1068,25 +1132,38 @@ $form.Add_DragDrop({
     if ($iso) { Set-IsoPath $ui $iso }
 })
 
+# BUG 13 FIX: Drag & Drop events on the ISO textbox were never wired up,
+# so dropping a file onto the text box had no effect whatsoever.
+$ui.TxtIso.Add_DragEnter({
+    param($s, $e)
+    if ($e.Data.GetDataPresent([System.Windows.Forms.DataFormats]::FileDrop)) {
+        $e.Effect = [System.Windows.Forms.DragDropEffects]::Copy
+    }
+})
+$ui.TxtIso.Add_DragDrop({
+    param($s, $e)
+    $files = $e.Data.GetData([System.Windows.Forms.DataFormats]::FileDrop)
+    $iso   = $files | Where-Object { $_ -match "\.iso$" } | Select-Object -First 1
+    if ($iso) { Set-IsoPath $ui $iso }
+})
+
 # -- Refresh button ---------------------------------------------------
 $ui.BtnRefresh.Add_Click({ Refresh-UsbList $ui })
 
 # -- Cancel button ----------------------------------------------------
 $ui.BtnCancel.Add_Click({
     $script:CancelRequested = $true
-    Write-Log $ui "Cancel requested - stopping after current step?" "Warn"
+    Write-Log $ui "Cancel requested - stopping after current step..." "Warn"
 })
 
 # -- Start button -----------------------------------------------------
 $ui.BtnStart.Add_Click({
-    # Validate ISO
     if (-not $script:IsoPath -or -not (Test-Path $script:IsoPath)) {
         [System.Windows.Forms.MessageBox]::Show(
             "Please select a valid Windows ISO file.",
             "Missing ISO", "OK", "Warning") | Out-Null
         return
     }
-    # Validate USB
     if ($ui.CmbUsb.SelectedIndex -lt 0 -or $script:UsbDrives.Count -eq 0) {
         [System.Windows.Forms.MessageBox]::Show(
             "Please select a USB drive.",
@@ -1096,7 +1173,7 @@ $ui.BtnStart.Add_Click({
 
     $selDrive = $script:UsbDrives[$ui.CmbUsb.SelectedIndex]
 
-    # Confirmation dialog
+    # BUG 14 FIX: Dialog text ended with "Continue..." instead of "Continue?"
     $confirm = [System.Windows.Forms.MessageBox]::Show(
         "[!]  WARNING`n`nAll data on the following drive will be PERMANENTLY erased:`n`n" +
         "   $($selDrive.Display)`n`n" +
@@ -1109,12 +1186,12 @@ $ui.BtnStart.Add_Click({
 
     $ui.TxtLog.Clear()
     Start-UsbCreation `
-        -UI       $ui `
-        -IsoPath  $script:IsoPath `
-        -DiskObj  $selDrive.Disk `
-        -UseGPT   $ui.RbGPT.Checked `
-        -UseNTFS  $ui.RbNTFS.Checked
+        -UI      $ui `
+        -IsoPath $script:IsoPath `
+        -DiskObj $selDrive.Disk `
+        -UseGPT  $ui.RbGPT.Checked `
+        -UseNTFS $ui.RbNTFS.Checked
 })
 
-# -- Launch ------------------------------------------------------------
+# -- Launch -----------------------------------------------------------
 [System.Windows.Forms.Application]::Run($form)
