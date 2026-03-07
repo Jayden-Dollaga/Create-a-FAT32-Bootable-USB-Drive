@@ -791,8 +791,20 @@ exit
         # GPT: tag with EFI System Partition GUID so UEFI firmware sees it.
         # MBR: mark active (bootable) flag.
         if ($UseGPT) {
-            $efiGuid = '{C12A7328-F81F-11D2-BA4B-00A0C93EC93B}'
-            $newPart = $DiskObj | New-Partition -UseMaximumSize -GptType $efiGuid -ErrorAction Stop
+            # Use the Microsoft Basic Data GUID, NOT the EFI System Partition GUID.
+            #
+            # The ESP GUID {C12A7328...} tells Windows this is a protected system
+            # partition.  Windows then:
+            #   - Blocks Explorer from opening it ("access denied")
+            #   - Hides it from Windows Setup's drive picker
+            #   - Some UEFI firmware skips ESP-flagged removable drives entirely
+            #
+            # The Basic Data GUID {EBD0A0A2...} makes the partition a normal
+            # accessible volume.  UEFI firmware on removable media does NOT
+            # require the ESP GUID — it scans every FAT32 volume for
+            # \EFI\Boot\bootx64.efi automatically (UEFI spec §12.3.1.1).
+            $basicDataGuid = '{EBD0A0A2-B9E5-4433-87C0-68B6B72699C7}'
+            $newPart = $DiskObj | New-Partition -UseMaximumSize -GptType $basicDataGuid -ErrorAction Stop
         } else {
             $newPart = $DiskObj | New-Partition -UseMaximumSize -IsActive -ErrorAction Stop
         }
@@ -1168,25 +1180,11 @@ exit
             }
         }
 
-        # 9d  GPT: set EFI System Partition attributes via diskpart -----
-        if ($UseGPT) {
-            Write-Log $UI "--- Setting GPT ESP attributes ---" "Cyan"
-            # BUG E FIX: Use the already-captured [int]$diskNum instead of
-            # re-reading $DiskObj.Number (which shadows $diskNum and could
-            # read a stale value if $DiskObj was not refreshed recently).
-            $partNum = (Get-Partition -DiskNumber $diskNum |
-                        Where-Object { $_.DriveLetter -eq $usbDrive }).PartitionNumber
-            if ($partNum) {
-                $dpScript = @"
-select disk $diskNum
-select partition $partNum
-gpt attributes=0x8000000000000001
-exit
-"@
-                $dpScript | & diskpart.exe | Out-Null
-                Write-Log $UI "  [OK] GPT partition attributes set." "Success"
-            }
-        }
+        # NOTE: We do NOT set gpt attributes=0x8000000000000001 here.
+        # That flag marks the partition as "required / do not automount"
+        # which is what caused Explorer to say "access denied" and Windows
+        # Setup to not show the drive.  Basic Data partitions need no
+        # special GPT attributes for a bootable Windows USB.
 
         # 9e  Final sanity check ----------------------------------------
         Write-Log $UI "--- Final boot file check ---" "Cyan"
