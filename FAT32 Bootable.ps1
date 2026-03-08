@@ -705,71 +705,28 @@ function Start-UsbCreation {
         $style = if ($UseGPT) { 'GPT' } else { 'MBR' }
         Write-Log $UI "Preparing disk $diskNum as $style..." "Warn"
 
-        # Bring the disk online and writable first.
-        # Ventoy / Rufus often leave sticks offline or read-only.
-        $DiskObj | Set-Disk -IsOffline $false -ErrorAction SilentlyContinue
+        # Bring the disk online and writable. Ventoy/Rufus leave sticks
+        # offline or read-only which makes Clear-Disk throw.
         $DiskObj | Set-Disk -IsReadOnly $false -ErrorAction SilentlyContinue
+        $DiskObj | Set-Disk -IsOffline  $false -ErrorAction SilentlyContinue
 
-        # Use a SINGLE diskpart session that does clean + convert in one shot.
-        #
-        # WHY: Every previous approach relied on WMI reporting PartitionStyle
-        # = RAW after a clean.  On many USB controllers and some Windows
-        # versions the storage driver caches the old style (MBR/GPT) in WMI
-        # indefinitely — it never becomes RAW no matter how long you poll.
-        # By issuing "clean" and "convert mbr/gpt" in the SAME diskpart
-        # session we bypass WMI entirely: diskpart owns the partition table
-        # directly and the convert succeeds immediately after the clean,
-        # before the WMI cache has any chance to interfere.
-        $convertCmd = if ($UseGPT) { 'convert gpt' } else { 'convert mbr' }
-        $dpScript = @"
-select disk $diskNum
-clean
-$convertCmd
-exit
-"@
-        Write-Log $UI "  Running diskpart: clean + $convertCmd..." "Muted"
-        $dpResult = $dpScript | & diskpart.exe 2>&1
-        $dpResult | Where-Object { $_.ToString().Trim() -ne '' } | ForEach-Object {
-            Write-Log $UI "  diskpart: $_" "Muted"
-        }
+        # Wipe all partition data — directly from the working reference script.
+        Write-Log $UI "  Wiping disk $diskNum..." "Muted"
+        $DiskObj | Clear-Disk -RemoveData -Confirm:$false -ErrorAction SilentlyContinue
 
-        # Verify diskpart succeeded by checking the output text.
-        # "DiskPart succeeded in cleaning" and "DiskPart successfully converted"
-        # are the exact strings diskpart.exe emits on success.
-        $dpOut = ($dpResult | Out-String)
-        if ($dpOut -notmatch 'succeeded in cleaning') {
-            throw "diskpart clean did not report success. Output: $dpOut"
+        # Initialize as MBR or GPT.  If it throws for any reason the disk
+        # was already initialized (WMI reports the old style after Clear-Disk
+        # on some controllers) — that's fine, we just continue.
+        Write-Log $UI "  Initializing as $style..." "Muted"
+        try {
+            Initialize-Disk -Number $diskNum -PartitionStyle $style -ErrorAction Stop
+        } catch {
+            Write-Log $UI "  Already initialized - continuing." "Muted"
         }
-        if ($dpOut -notmatch 'successfully converted') {
-            throw "diskpart $convertCmd did not report success. Output: $dpOut"
-        }
-
-        # Wait for the storage stack to re-enumerate the newly initialised
-        # disk.  We do NOT check PartitionStyle here — WMI is unreliable
-        # immediately after diskpart.  We just wait for the disk to be
-        # visible and for Initialize-Disk to accept it (or confirm it is
-        # already correctly initialised by diskpart).
-        Write-Log $UI "  Waiting for disk $diskNum to re-enumerate..." "Muted"
-        $DiskObj = $null
-        for ($tries = 0; $tries -lt 30; $tries++) {
-            try {
-                $DiskObj = Get-Disk -Number $diskNum -ErrorAction Stop
-                break
-            } catch {
-                Start-Sleep -Milliseconds 500
-            }
-        }
-        if (-not $DiskObj) {
-            throw "Disk $diskNum did not re-appear after diskpart. Try re-inserting the USB drive."
-        }
-
-        # Initialize-Disk is not needed — diskpart "convert mbr/gpt" above
-        # already wrote the partition table.  Calling it causes "already
-        # initialized" errors on every run.  Removed.
 
         Start-Sleep -Milliseconds 800
         $DiskObj = Get-Disk -Number $diskNum
-        Write-Log $UI "[OK]  Disk $diskNum prepared ($style, $($DiskObj.PartitionStyle))." "Success"
+        Write-Log $UI "[OK]  Disk $diskNum prepared ($($DiskObj.PartitionStyle))." "Success"
 
         # ----------------------------------------------------------------
         # STEP 5  Create partition and format
@@ -1147,36 +1104,96 @@ exit
         }
 
         # 9c  MBR/VBR boot sector (BIOS boot only) ---------------------
+        #
+        # The working reference script uses:
+        #   Start-Process bootsect.exe -ArgumentList "..." -Wait -Verb runAs
+        #
+        # This is the correct approach.  Calling bootsect.exe directly (&)
+        # or via Set-Location fails with "file is corrupted" on many systems
+        # because the binary is a PE that requires its own process token.
+        # Start-Process -Verb runAs spawns it as a fresh elevated process
+        # which resolves that entirely.
+        #
+        # Fallback: bcdboot.exe (always in System32) writes the same VBR
+        # boot code.  Restore the ISO BCD afterwards so Setup boots, not
+        # the host OS.
         if (-not $UseGPT) {
-            Write-Log $UI "--- Writing BIOS boot sector (bootsect) ---" "Cyan"
+            Write-Log $UI "--- Writing BIOS boot sector ---" "Cyan"
 
-            $bootsectExe = @("$usbDrive`:\boot\bootsect.exe",
-                             "$isoDrive`:\boot\bootsect.exe") |
-                           Where-Object { Test-Path $_ } |
-                           Select-Object -First 1
+            $bootSectorWritten = $false
 
-            if ($bootsectExe) {
+            # Candidate list: USB copy first (avoids ISO corruption risk),
+            # then ISO copy directly, then Windows ADK if installed.
+            $adkGlob = @(
+                "$env:ProgramFiles\Windows Kits\*\Assessment and Deployment Kit\Deployment Tools\*\BCDBoot\bootsect.exe",
+                "${env:ProgramFiles(x86)}\Windows Kits\*\Assessment and Deployment Kit\Deployment Tools\*\BCDBoot\bootsect.exe"
+            )
+            $adkPaths = $adkGlob |
+                ForEach-Object { Resolve-Path $_ -ErrorAction SilentlyContinue } |
+                Select-Object -ExpandProperty Path -ErrorAction SilentlyContinue
+
+            $bootsectCandidates = @(
+                "$usbDrive`:\boot\bootsect.exe",
+                "$isoDrive`:\boot\bootsect.exe"
+            ) + @($adkPaths)
+
+            foreach ($candidate in $bootsectCandidates) {
+                if (-not (Test-Path $candidate -ErrorAction SilentlyContinue)) { continue }
+                Write-Log $UI "  Running bootsect.exe: $candidate" "Muted"
                 try {
-                    $bsOut = & "$bootsectExe" /nt60 "$usbDrive`:" /force /mbr 2>&1
-                    $bsOut | Where-Object { $_.Trim() -ne "" } |
-                             ForEach-Object { Write-Log $UI "  bootsect: $_" "Muted" }
-                    if ($LASTEXITCODE -eq 0 -or $null -eq $LASTEXITCODE) {
+                    # Use Start-Process -Verb runAs exactly as the reference
+                    # script does.  This spawns a fresh elevated process which
+                    # avoids the "file is corrupted" error that occurs when
+                    # calling bootsect.exe directly from the current session.
+                    $bsProc = Start-Process -FilePath $candidate `
+                                            -ArgumentList "/nt60 `"$usbDrive`:`" /mbr" `
+                                            -Wait -PassThru -Verb RunAs `
+                                            -ErrorAction Stop
+                    if ($bsProc.ExitCode -eq 0) {
                         Write-Log $UI "  [OK] VBR + MBR boot code written." "Success"
+                        $bootSectorWritten = $true
+                        break
                     } else {
-                        Write-Log $UI "  [!] bootsect exit code: $LASTEXITCODE (BIOS boot may not work)." "Warn"
+                        Write-Log $UI "  [!] bootsect exit $($bsProc.ExitCode) - trying next." "Warn"
                     }
                 } catch {
-                    # bootsect.exe itself is corrupted or unreadable on this ISO.
-                    # This is non-fatal — UEFI boot via EFI files is unaffected.
-                    # Only legacy BIOS boot is impaired.
-                    Write-Log $UI "  [!] bootsect.exe could not run: $($_.Exception.Message)" "Warn"
-                    Write-Log $UI "  [!] BIOS (legacy) boot may not work, but UEFI boot is unaffected." "Warn"
-                    Write-Log $UI "      To fix BIOS boot manually, run on a working machine:" "Warn"
-                    Write-Log $UI "      bootsect /nt60 $usbDrive`: /force /mbr" "Warn"
+                    Write-Log $UI "  [!] $candidate failed: $($_.Exception.Message) - trying next." "Warn"
                 }
-            } else {
-                Write-Log $UI "  [!] bootsect.exe not found - BIOS boot may not work." "Warn"
-                Write-Log $UI "      Run manually: bootsect /nt60 $usbDrive`: /force /mbr" "Warn"
+            }
+
+            # Fallback: bcdboot.exe writes identical VBR boot code.
+            if (-not $bootSectorWritten) {
+                Write-Log $UI "  Falling back to bcdboot.exe..." "Warn"
+                $bcdbootExe = "$env:SystemRoot\System32\bcdboot.exe"
+                if (Test-Path $bcdbootExe) {
+                    try {
+                        $bcProc = Start-Process -FilePath $bcdbootExe `
+                                                -ArgumentList "C:\Windows /s `"$usbDrive`:`" /f BIOS" `
+                                                -Wait -PassThru -Verb RunAs `
+                                                -ErrorAction Stop
+                        if ($bcProc.ExitCode -eq 0) {
+                            Write-Log $UI "  [OK] VBR + MBR boot code written via bcdboot." "Success"
+                            $bootSectorWritten = $true
+                            # Restore ISO BCD so Setup boots, not host Windows.
+                            $isoBcd = "$isoDrive`:\boot\bcd"
+                            $usbBcd = "$usbDrive`:\boot\BCD"
+                            if (Test-Path $isoBcd) {
+                                Copy-Item $isoBcd $usbBcd -Force
+                                Write-Log $UI "  [OK] Setup BCD restored from ISO." "Success"
+                            }
+                        } else {
+                            Write-Log $UI "  [!] bcdboot exit $($bcProc.ExitCode)." "Warn"
+                        }
+                    } catch {
+                        Write-Log $UI "  [!] bcdboot failed: $($_.Exception.Message)" "Warn"
+                    }
+                }
+            }
+
+            if (-not $bootSectorWritten) {
+                Write-Log $UI "  [!] Could not write BIOS boot sector automatically." "Warn"
+                Write-Log $UI "      UEFI boot is unaffected. To fix BIOS boot manually:" "Warn"
+                Write-Log $UI "      Start-Process $isoDrive`:\boot\bootsect.exe -ArgumentList '/nt60 $usbDrive`: /mbr' -Verb RunAs -Wait" "Warn"
             }
         }
 
